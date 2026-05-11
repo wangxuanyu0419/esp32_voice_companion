@@ -100,11 +100,13 @@ static lv_obj_t *make_row(lv_obj_t *parent,
     lv_label_set_text(key_lbl, key);
     lv_obj_set_style_text_color(key_lbl, lv_color_hex(S_KEY), 0);
     lv_obj_set_style_text_font(key_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(key_lbl, lv_color_hex(S_ROW_BG), 0); /* AA blend bg */
 
     lv_obj_t *val_lbl = lv_label_create(row);
     lv_label_set_text(val_lbl, val_init);
     lv_obj_set_style_text_color(val_lbl, lv_color_hex(S_VAL), 0);
     lv_obj_set_style_text_font(val_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_bg_color(val_lbl, lv_color_hex(S_ROW_BG), 0); /* AA blend bg */
 
     if (val_out) *val_out = val_lbl;
     return row;
@@ -195,7 +197,7 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row,     lv_color_hex(0x111120), 0);
+    lv_obj_set_style_bg_color(row,     lv_color_hex(S_ROW_BG), 0);
     lv_obj_set_style_bg_opa(row,       LV_OPA_100, 0);
     lv_obj_set_style_radius(row,       10, 0);
     lv_obj_set_style_border_width(row, 0, 0);
@@ -211,6 +213,7 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
     lv_label_set_text(lbl, label);
     lv_obj_set_style_text_color(lbl, lv_color_hex(S_KEY), 0);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(lbl, lv_color_hex(S_ROW_BG), 0);   /* AA blend bg */
 
     lv_obj_t *dd = lv_dropdown_create(row);
     lv_dropdown_set_options(dd, options);
@@ -288,12 +291,14 @@ static void build_ui(void)
     lv_label_set_text(back_lbl, LV_SYMBOL_LEFT);
     lv_obj_set_style_text_color(back_lbl, lv_color_hex(S_ACCENT), 0);
     lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(back_lbl, lv_color_hex(S_BG), 0); /* AA blend bg */
     lv_obj_center(back_lbl);
 
     lv_obj_t *title = lv_label_create(hdr);
     lv_label_set_text(title, "  Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(S_HDR), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(title, lv_color_hex(S_BG), 0);     /* AA blend bg */
 
     /* Thin separator */
     lv_obj_t *sep0 = lv_obj_create(s_screen);
@@ -370,6 +375,7 @@ static void build_ui(void)
     lv_label_set_text(sleep_hdr, LV_SYMBOL_POWER "  Display Sleep");
     lv_obj_set_style_text_color(sleep_hdr, lv_color_hex(S_ACCENT), 0);
     lv_obj_set_style_text_font(sleep_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(sleep_hdr, lv_color_hex(S_BG), 0);  /* AA blend bg */
     lv_obj_set_style_pad_left(sleep_hdr, 4, 0);
 
     /* Dim + sleep dropdowns */

@@ -178,6 +178,7 @@ static void build_ui(void)
     lv_label_set_text(s_time_lbl, "--:--");
     lv_obj_set_style_text_color(s_time_lbl, lv_color_hex(C_TIME), 0);
     lv_obj_set_style_text_font(s_time_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_bg_color(s_time_lbl, lv_color_hex(C_BG), 0); /* AA blend bg */
 
     /* Right cluster: WiFi icon + WS dot */
     lv_obj_t *right = lv_obj_create(bar);
@@ -195,6 +196,7 @@ static void build_ui(void)
     lv_label_set_text(s_wifi_icon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_font(s_wifi_icon, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_wifi_icon, lv_color_hex(C_WIFI_OFF), 0);
+    lv_obj_set_style_bg_color(s_wifi_icon, lv_color_hex(C_BG), 0); /* AA blend bg */
 
     /* WS dot — 11 × 11 circle */
     s_ws_dot = lv_obj_create(right);
@@ -240,6 +242,7 @@ static void build_ui(void)
         lv_label_set_text(icon, t->symbol);
         lv_obj_set_style_text_font(icon, &lv_font_montserrat_40, 0);
         lv_obj_set_style_text_color(icon, lv_color_hex(t->icon_col), 0);
+        lv_obj_set_style_bg_color(icon, lv_color_hex(t->bg), 0);  /* AA blend bg */
         lv_obj_center(icon);
 
         /* Dim icon slightly on press (mirrors tile brightening) */
