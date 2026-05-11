@@ -57,13 +57,13 @@ esp_err_t avatar_init(void)
     lv_label_set_text(s_msg_label, "");
     lv_obj_align(s_msg_label, LV_ALIGN_CENTER, 0, 120);
     lv_obj_set_style_text_color(s_msg_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_color(s_msg_label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_msg_label, LV_OPA_TRANSP, 0);
 
     s_status_label = lv_label_create(s_screen);
     lv_label_set_text(s_status_label, "Init...");
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x888888), 0);
-    lv_obj_set_style_bg_color(s_status_label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_status_label, LV_OPA_TRANSP, 0);
 
     esp_timer_create_args_t ta = {.callback = emotion_timer_cb,
                                   .name     = "emo_tmr"};

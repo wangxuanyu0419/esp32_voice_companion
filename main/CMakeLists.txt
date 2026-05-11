@@ -31,6 +31,10 @@ set(SRCS
     "apps/chat/chat_app.c"
     "apps/launcher/launcher_app.c"
     "apps/settings/settings_app.c"
+
+    # Assets — pre-rendered LVGL image C arrays
+    "assets/img_chat.c"
+    "assets/img_settings.c"
 )
 
 # Make every header findable by basename (no path prefix needed in #include)
@@ -48,6 +52,7 @@ set(INCLUDE_DIRS
     "apps/chat"
     "apps/launcher"
     "apps/settings"
+    "assets"
 )
 
 idf_component_register(
