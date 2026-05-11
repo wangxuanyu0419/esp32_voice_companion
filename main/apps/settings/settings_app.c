@@ -22,6 +22,7 @@
 #include "wifi_manager.h"
 #include "ws_protocol.h"
 #include "display_driver.h"
+#include "sleep_manager.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -35,12 +36,28 @@ static const char *TAG = "SETTINGS";
 /* -------------------------------------------------------------------------
  * UI state
  * ------------------------------------------------------------------------- */
-static lv_obj_t *s_screen      = NULL;
-static lv_obj_t *s_wifi_val    = NULL;
-static lv_obj_t *s_ws_val      = NULL;
-static lv_obj_t *s_heap_val    = NULL;
-static lv_obj_t *s_uptime_val  = NULL;
+static lv_obj_t *s_screen        = NULL;
+static lv_obj_t *s_wifi_val      = NULL;
+static lv_obj_t *s_ws_val        = NULL;
+static lv_obj_t *s_heap_val      = NULL;
+static lv_obj_t *s_uptime_val    = NULL;
+static lv_obj_t *s_dim_dd        = NULL;   /* dim-timeout dropdown */
+static lv_obj_t *s_sleep_dd      = NULL;   /* sleep-timeout dropdown */
 static lv_timer_t *s_refresh_timer = NULL;
+
+/* -------------------------------------------------------------------------
+ * Timeout option tables
+ * ------------------------------------------------------------------------- */
+static const uint16_t k_timeout_vals[] = { 15, 30, 60, 120, 300, 0 };
+#define TIMEOUT_OPTS_COUNT  6
+static const char *k_timeout_opts = "15 s\n30 s\n1 min\n2 min\n5 min\nNever";
+
+static uint8_t timeout_to_idx(uint16_t secs)
+{
+    for (int i = 0; i < TIMEOUT_OPTS_COUNT - 1; i++)
+        if (k_timeout_vals[i] == secs) return (uint8_t)i;
+    return TIMEOUT_OPTS_COUNT - 1; /* "Never" */
+}
 
 /* -------------------------------------------------------------------------
  * Helpers
@@ -123,6 +140,97 @@ static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
     app_registry_launch("launcher");
+}
+
+/* -------------------------------------------------------------------------
+ * Sleep timeout dropdowns
+ * ------------------------------------------------------------------------- */
+
+/* Style a dropdown to match the dark AMOLED theme */
+static void style_dropdown(lv_obj_t *dd)
+{
+    /* Button face */
+    lv_obj_set_style_bg_color(dd,      lv_color_hex(0x1A1A2E), 0);
+    lv_obj_set_style_bg_opa(dd,        LV_OPA_100, 0);
+    lv_obj_set_style_border_color(dd,  lv_color_hex(0x2A2A44), 0);
+    lv_obj_set_style_border_width(dd,  1, 0);
+    lv_obj_set_style_radius(dd,        8, 0);
+    lv_obj_set_style_text_color(dd,    lv_color_hex(0xE8E8F8), 0);
+    lv_obj_set_style_text_font(dd,     &lv_font_montserrat_16, 0);
+    lv_obj_set_style_pad_hor(dd,       12, 0);
+    lv_obj_set_style_pad_ver(dd,       8,  0);
+
+    /* Drop-down list */
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    lv_obj_set_style_bg_color(list,    lv_color_hex(0x1A1A2E), 0);
+    lv_obj_set_style_border_color(list, lv_color_hex(0x2A2A44), 0);
+    lv_obj_set_style_border_width(list, 1, 0);
+    lv_obj_set_style_text_color(list,  lv_color_hex(0xE8E8F8), 0);
+    lv_obj_set_style_text_font(list,   &lv_font_montserrat_16, 0);
+    /* Selected item highlight */
+    lv_obj_set_style_bg_color(list,    lv_color_hex(0x163060),
+                               LV_PART_SELECTED | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(list,      LV_OPA_100,
+                             LV_PART_SELECTED | LV_STATE_CHECKED);
+}
+
+static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
+                                   const char *label,
+                                   const char *options,
+                                   uint8_t     init_idx,
+                                   lv_event_cb_t cb)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row,     lv_color_hex(0x111120), 0);
+    lv_obj_set_style_bg_opa(row,       LV_OPA_100, 0);
+    lv_obj_set_style_radius(row,       10, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_ver(row,      10, 0);
+    lv_obj_set_style_pad_hor(row,      14, 0);
+    lv_obj_set_flex_flow(row,          LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row,
+                          LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0x8080A0), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+
+    lv_obj_t *dd = lv_dropdown_create(row);
+    lv_dropdown_set_options(dd, options);
+    lv_dropdown_set_selected(dd, init_idx);
+    lv_obj_set_width(dd, 110);
+    style_dropdown(dd);
+    lv_obj_add_event_cb(dd, cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    return dd;
+}
+
+static void dim_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t idx  = (uint8_t)lv_dropdown_get_selected(dd);
+    app_config_t cfg = {0};
+    config_get(&cfg);
+    cfg.dim_timeout_s = k_timeout_vals[idx];
+    config_save(&cfg);
+    sleep_manager_set_timeouts(cfg.dim_timeout_s, cfg.sleep_timeout_s);
+    ESP_LOGI(TAG, "Dim timeout set to %u s", cfg.dim_timeout_s);
+}
+
+static void sleep_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t idx  = (uint8_t)lv_dropdown_get_selected(dd);
+    app_config_t cfg = {0};
+    config_get(&cfg);
+    cfg.sleep_timeout_s = k_timeout_vals[idx];
+    config_save(&cfg);
+    sleep_manager_set_timeouts(cfg.dim_timeout_s, cfg.sleep_timeout_s);
+    ESP_LOGI(TAG, "Sleep timeout set to %u s", cfg.sleep_timeout_s);
 }
 
 /* -------------------------------------------------------------------------
@@ -235,6 +343,30 @@ static void build_ui(void)
 
     make_row(content, LV_SYMBOL_LIST "  Free heap", "—", &s_heap_val);
     make_row(content, LV_SYMBOL_REFRESH "  Uptime", "—", &s_uptime_val);
+
+    /* --- Sleep settings separator --- */
+    lv_obj_t *sep2 = lv_obj_create(content);
+    lv_obj_set_size(sep2, DISPLAY_H_RES - 32, 1);
+    lv_obj_set_style_bg_color(sep2, lv_color_hex(0x18182A), 0);
+    lv_obj_set_style_border_width(sep2, 0, 0);
+    lv_obj_set_style_pad_all(sep2, 0, 0);
+
+    /* Section label */
+    lv_obj_t *sleep_hdr = lv_label_create(content);
+    lv_label_set_text(sleep_hdr, LV_SYMBOL_POWER "  Display Sleep");
+    lv_obj_set_style_text_color(sleep_hdr, lv_color_hex(0x5BAFFF), 0);
+    lv_obj_set_style_text_font(sleep_hdr, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_pad_left(sleep_hdr, 4, 0);
+
+    /* Dim + sleep dropdowns */
+    s_dim_dd   = make_dropdown_row(content, LV_SYMBOL_EYE_CLOSE "  Dim after",
+                                   k_timeout_opts,
+                                   timeout_to_idx(cfg.dim_timeout_s),
+                                   dim_dd_cb);
+    s_sleep_dd = make_dropdown_row(content, LV_SYMBOL_POWER "  Sleep after",
+                                   k_timeout_opts,
+                                   timeout_to_idx(cfg.sleep_timeout_s),
+                                   sleep_dd_cb);
 
     refresh_dynamic_rows();
 }

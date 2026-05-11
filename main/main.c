@@ -14,6 +14,7 @@
 #include "scene_avatar.h"
 #include "audio_pipeline.h"
 #include "ws_protocol.h"
+#include "sleep_manager.h"
 #include "chat_app.h"
 #include "launcher_app.h"
 #include "settings_app.h"
@@ -71,6 +72,9 @@ static void application_init_all(void)
 
     /* WebSocket client (not connected yet) */
     ESP_ERROR_CHECK(ws_client_init());
+
+    /* Screen dim / sleep manager — uses LVGL timer, must come after display init */
+    ESP_ERROR_CHECK(sleep_manager_init());
 }
 
 /* -------------------------------------------------------------------------
@@ -154,6 +158,7 @@ static void event_handler_task(void *arg)
                     break;
                 case EVT_BUTTON_PRESS:
                     ESP_LOGI(TAG, "[EVT] Button pressed");
+                    sleep_manager_activity();   /* wake screen if dim/off */
                     break;
                 case EVT_BUTTON_RELEASE:
                     ESP_LOGI(TAG, "[EVT] Button released");

@@ -80,13 +80,14 @@ static const sh8601_lcd_init_cmd_t s_sh8601_init_cmds[] = {
 /* -------------------------------------------------------------------------
  * Static state
  * ------------------------------------------------------------------------- */
-static esp_lcd_panel_handle_t   s_panel        = NULL;
-static esp_lcd_touch_handle_t   s_touch        = NULL;
-static lv_disp_drv_t            s_disp_drv;
-static lv_disp_draw_buf_t       s_draw_buf;
-static SemaphoreHandle_t        s_lvgl_mux     = NULL;
-static esp_timer_handle_t       s_tick_timer   = NULL;
-static i2c_master_bus_handle_t  s_i2c_bus      = NULL; /* saved for diagnostics */
+static esp_lcd_panel_handle_t    s_panel        = NULL;
+static esp_lcd_panel_io_handle_t s_io_handle    = NULL; /* saved for brightness cmds */
+static esp_lcd_touch_handle_t    s_touch        = NULL;
+static lv_disp_drv_t             s_disp_drv;
+static lv_disp_draw_buf_t        s_draw_buf;
+static SemaphoreHandle_t         s_lvgl_mux     = NULL;
+static esp_timer_handle_t        s_tick_timer   = NULL;
+static i2c_master_bus_handle_t   s_i2c_bus      = NULL; /* saved for diagnostics */
 
 /* -------------------------------------------------------------------------
  * LVGL tick (called by esp_timer every 2 ms)
@@ -263,6 +264,7 @@ esp_err_t display_driver_init(void)
                                     &s_disp_drv);
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
         (esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io_handle));
+    s_io_handle = io_handle; /* save for runtime brightness commands */
 
     /* --- SH8601 vendor config: custom init with SLPOUT + brightness --- */
     sh8601_vendor_config_t vendor_cfg = {
@@ -390,4 +392,20 @@ void display_driver_unlock(void)
 void display_driver_i2c_scan(void)
 {
     if (s_i2c_bus) i2c_scan(s_i2c_bus);
+}
+
+/* -------------------------------------------------------------------------
+ * Runtime brightness / display-on control
+ * ------------------------------------------------------------------------- */
+esp_err_t display_set_brightness(uint8_t level)
+{
+    if (!s_io_handle) return ESP_ERR_INVALID_STATE;
+    /* SH8601 WRDISBV (0x51): single-byte brightness, 0x00–0xFF */
+    return esp_lcd_panel_io_tx_param(s_io_handle, 0x51, &level, 1);
+}
+
+esp_err_t display_set_on(bool on)
+{
+    if (!s_panel) return ESP_ERR_INVALID_STATE;
+    return esp_lcd_panel_disp_on_off(s_panel, on);
 }

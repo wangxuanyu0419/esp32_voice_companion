@@ -19,6 +19,7 @@ set(SRCS
     # Layer 3 — Application framework
     "framework/app_state.c"
     "framework/application.c"
+    "framework/sleep_manager.c"
     "framework/protocol/ws_protocol.c"
     "framework/audio/audio_pipeline.c"
     "framework/audio/vad.c"

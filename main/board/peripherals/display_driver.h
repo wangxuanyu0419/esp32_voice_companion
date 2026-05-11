@@ -50,4 +50,20 @@ void display_driver_unlock(void);
  */
 void display_driver_i2c_scan(void);
 
+/**
+ * @brief  Set SH8601 panel brightness via WRDISBV register (0x51).
+ *
+ * @param  level  0x00 = off, 0xFF = maximum brightness.
+ * @return ESP_OK on success.
+ */
+esp_err_t display_set_brightness(uint8_t level);
+
+/**
+ * @brief  Turn the AMOLED panel on or off (DISPON 0x29 / DISPOFF 0x28).
+ *
+ * Turning off keeps LVGL state intact; wake is ~fast (no re-init needed).
+ * @param  on  true = display on, false = display off.
+ */
+esp_err_t display_set_on(bool on);
+
 #endif /* DISPLAY_DRIVER_H */

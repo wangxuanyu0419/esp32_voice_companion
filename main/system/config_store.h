@@ -18,14 +18,19 @@ typedef struct {
     char cf_client_id[64];      /* CF-Access-Client-Id (Cloudflare Zero Trust) */
     char cf_client_secret[128]; /* CF-Access-Client-Secret */
     char ws_auth_token[128];    /* Authorization: Bearer <token> (server-side) */
+    /* Sleep / display power management */
+    uint16_t dim_timeout_s;   /* Seconds of inactivity before dimming.  0 = never. */
+    uint16_t sleep_timeout_s; /* Seconds of inactivity before screen off. 0 = never. */
 } app_config_t;
 
-#define DEFAULT_DEVICE_ID     "esp32s3_001"
-#define DEFAULT_AGENT         "main"
-#define DEFAULT_SERVER_URL    "wss://clawchat.xuanyu.uk"
-#define DEFAULT_VOLUME        80
-#define DEFAULT_AUTO_PLAY_TTS true
-#define DEFAULT_BEEP_FEEDBACK  true
+#define DEFAULT_DEVICE_ID       "esp32s3_001"
+#define DEFAULT_AGENT           "main"
+#define DEFAULT_SERVER_URL      "wss://clawchat.xuanyu.uk"
+#define DEFAULT_VOLUME          80
+#define DEFAULT_AUTO_PLAY_TTS   true
+#define DEFAULT_BEEP_FEEDBACK   true
+#define DEFAULT_DIM_TIMEOUT_S   30    /* dim after 30 s */
+#define DEFAULT_SLEEP_TIMEOUT_S 120   /* screen off after 2 min */
 
 esp_err_t config_init(void);
 esp_err_t config_get(app_config_t *cfg);

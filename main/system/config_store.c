@@ -73,6 +73,16 @@ esp_err_t config_get(app_config_t *cfg)
         cfg->beep_feedback = (bool)tmp_beep;
     }
 
+    /* Sleep timeouts — check return code so 0 ("never") is stored correctly */
+    {
+        int32_t tmp = -1;
+        cfg->dim_timeout_s   = (nvs_get_i32(handle, "dim_t",   &tmp) == ESP_OK)
+                               ? (uint16_t)tmp : DEFAULT_DIM_TIMEOUT_S;
+        tmp = -1;
+        cfg->sleep_timeout_s = (nvs_get_i32(handle, "sleep_t", &tmp) == ESP_OK)
+                               ? (uint16_t)tmp : DEFAULT_SLEEP_TIMEOUT_S;
+    }
+
     nvs_close(handle);
 
     if (strlen(cfg->device_id) == 0)
@@ -109,6 +119,8 @@ esp_err_t config_save(const app_config_t *cfg)
     if ((ret = nvs_set_str(handle, "cf_client_id", cfg->cf_client_id))    != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "cf_secret",    cfg->cf_client_secret)) != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "ws_token",     cfg->ws_auth_token))    != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "dim_t",   (int32_t)cfg->dim_timeout_s))   != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "sleep_t", (int32_t)cfg->sleep_timeout_s)) != ESP_OK) goto out;
     ret = nvs_commit(handle);
 
 out:
@@ -125,9 +137,11 @@ esp_err_t config_reset(void)
     strncpy(cfg.device_id,   DEFAULT_DEVICE_ID,  sizeof(cfg.device_id)   - 1);
     strncpy(cfg.agent,       DEFAULT_AGENT,       sizeof(cfg.agent)       - 1);
     strncpy(cfg.server_url,  DEFAULT_SERVER_URL,  sizeof(cfg.server_url)  - 1);
-    cfg.volume        = DEFAULT_VOLUME;
-    cfg.auto_play_tts = DEFAULT_AUTO_PLAY_TTS;
-    cfg.beep_feedback = DEFAULT_BEEP_FEEDBACK;
+    cfg.volume          = DEFAULT_VOLUME;
+    cfg.auto_play_tts   = DEFAULT_AUTO_PLAY_TTS;
+    cfg.beep_feedback   = DEFAULT_BEEP_FEEDBACK;
+    cfg.dim_timeout_s   = DEFAULT_DIM_TIMEOUT_S;
+    cfg.sleep_timeout_s = DEFAULT_SLEEP_TIMEOUT_S;
     return config_save(&cfg);
 }
 
