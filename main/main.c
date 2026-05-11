@@ -20,6 +20,7 @@
 #include "app_registry.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_sntp.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -99,7 +100,15 @@ static void net_task(void *arg)
     while (!wifi_is_connected()) {
         vTaskDelay(pdMS_TO_TICKS(500));
     }
-    ESP_LOGI(TAG, "WiFi connected — connecting WebSocket");
+    ESP_LOGI(TAG, "WiFi connected — syncing time + connecting WebSocket");
+
+    /* SNTP time sync — set UTC, server will keep wall-clock accurate */
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    esp_sntp_init();
+    ESP_LOGI(TAG, "SNTP started (pool.ntp.org, UTC)");
 
     app_config_t cfg;
     if (config_get(&cfg) == ESP_OK) {

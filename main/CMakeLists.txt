@@ -64,6 +64,7 @@ idf_component_register(
         mbedtls
         freertos
         log
+        lwip
         # Local components
         openclaw_bridge
         # Managed components (names as registered by idf_component_manager)

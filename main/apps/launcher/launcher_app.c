@@ -1,18 +1,29 @@
 /*
- * launcher_app.c — Desktop OS home screen (LVGL v8, 368×448).
+ * launcher_app.c — iOS-style home screen for ESP32-S3 Voice Companion
  *
- * Layout:
- *   ┌──────────────────────────┐  ← Title bar 44 px
- *   │  ESP32 OS   ●WiFi  ●WS  │
- *   ├──────────────────────────┤
- *   │  ┌──────┐   ┌──────┐   │  ← 2 columns × N rows, 150×150 px tiles
- *   │  │  🤖  │   │  ⚙️  │  │
- *   │  │      │   │      │  │
- *   │  │Chat  │   │Sett. │  │
- *   │  └──────┘   └──────┘   │
- *   ├──────────────────────────┤
- *   │  Touch tile to open app  │  ← Hint bar 24 px
- *   └──────────────────────────┘
+ * Design goals
+ *  • AMOLED-first dark palette  — near-black bg, per-tile accent colours
+ *  • iOS squircle tiles          — 160×160 px, 26 px corner radius
+ *  • Large 40 px symbols        — no text labels on tiles
+ *  • Status bar                  — live clock (HH:MM) + WiFi icon + WS dot
+ *  • Soft pressed feedback       — tile brightens on tap
+ *
+ * Screen: 368 × 448 px
+ *
+ *   ┌──────────────────────────────┐  ← 52 px status bar
+ *   │  12:34                 📶 ● │    left=time  right=wifi+ws
+ *   ├──────────────────────────────┤  ← 1 px separator
+ *   │  ┌──────────┐  ┌──────────┐ │  ← row 0  y=78
+ *   │  │          │  │          │ │
+ *   │  │    🔉   │  │    ⚙    │ │    160 × 160, r=26
+ *   │  │          │  │          │ │
+ *   │  └──────────┘  └──────────┘ │
+ *   │  ┌──────────┐  ┌──────────┐ │  ← row 1  y=262
+ *   │  │          │  │          │ │
+ *   │  │    +     │  │    +     │ │    placeholder tiles (dim)
+ *   │  │          │  │          │ │
+ *   │  └──────────┘  └──────────┘ │
+ *   └──────────────────────────────┘
  */
 
 #include "launcher_app.h"
@@ -23,193 +34,242 @@
 #include "ws_protocol.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include <time.h>
+#include <stdio.h>
 #include <string.h>
 
 static const char *TAG = "LAUNCHER";
 
-/* -------------------------------------------------------------------------
- * UI state
- * ------------------------------------------------------------------------- */
-static lv_obj_t *s_screen      = NULL;
-static lv_obj_t *s_wifi_dot    = NULL;
-static lv_obj_t *s_ws_dot      = NULL;
+/* ── Colour palette ──────────────────────────────────────────────────────
+ * All values are 0xRRGGBB.
+ * The dark palette lets AMOLED pixels switch off (true black = no light).
+ * ----------------------------------------------------------------------- */
+#define C_BG        0x09090F   /* Screen background — near black            */
+#define C_SEP       0x18182A   /* 1-px separator under status bar           */
+#define C_TIME      0xF5F5F5   /* Clock text                                */
+#define C_WIFI_ON   0x34C759   /* Apple green — connected                   */
+#define C_WIFI_OFF  0x3A3A52   /* Muted grey — disconnected                 */
+#define C_WS_ON     0x34C759
+#define C_WS_OFF    0x3A3A52
 
-/* -------------------------------------------------------------------------
- * Tile descriptor
- * ------------------------------------------------------------------------- */
+/* ── Tile colour table ───────────────────────────────────────────────────
+ * Each tile carries its own identity colour.  Pressed variant is ~12%
+ * lighter (computed at build_ui time via lv_color_mix).
+ * ----------------------------------------------------------------------- */
 typedef struct {
-    const char *label;    /* Display name */
-    const char *app_id;   /* app_registry ID to launch */
-    const char *icon;     /* LVGL symbol or short emoji fallback */
-} tile_desc_t;
+    const char *app_id;       /* NULL = placeholder              */
+    const char *symbol;       /* LV_SYMBOL_*                     */
+    uint32_t    bg;           /* Normal background               */
+    uint32_t    icon_col;     /* Symbol colour                   */
+    bool        placeholder;
+} tile_def_t;
 
-static const tile_desc_t k_tiles[] = {
-    { "ClawChat",  "chat",     LV_SYMBOL_AUDIO  },
-    { "Settings",  "settings", LV_SYMBOL_SETTINGS },
+static const tile_def_t k_tiles[4] = {
+    /*  id          symbol              bg        icon_col  placeholder */
+    { "chat",     LV_SYMBOL_AUDIO,    0x163060, 0x5BAFFF, false },
+    { "settings", LV_SYMBOL_SETTINGS, 0x212130, 0xA0A8C8, false },
+    { NULL,       LV_SYMBOL_PLUS,     0x0E0E16, 0x25253A, true  },
+    { NULL,       LV_SYMBOL_PLUS,     0x0E0E16, 0x25253A, true  },
 };
-#define NUM_TILES  (sizeof(k_tiles) / sizeof(k_tiles[0]))
 
-/* -------------------------------------------------------------------------
- * Tile tap handler
- * ------------------------------------------------------------------------- */
+/* ── Layout constants ────────────────────────────────────────────────────
+ *  Screen 368 × 448
+ *  Status bar: h=52, y=0
+ *  Separator:  h=1,  y=52
+ *  Grid origin: y=53
+ *
+ *  2 cols: side_pad=18, col_gap=12
+ *    col0_x = 18
+ *    col1_x = 18+160+12 = 190
+ *
+ *  2 rows: row_top_pad=25, row_gap=24
+ *    row0_y = 53+25 = 78
+ *    row1_y = 78+160+24 = 262
+ *    bottom margin = 448-(262+160) = 26 px  (visually balanced)
+ * ----------------------------------------------------------------------- */
+#define STATUS_H   52
+#define TILE_W     160
+#define TILE_H     160
+#define TILE_R     26
+#define COL0_X     18
+#define COL1_X     190
+#define ROW0_Y     78
+#define ROW1_Y     262
+
+/* ── Widget handles ──────────────────────────────────────────────────── */
+static lv_obj_t   *s_screen      = NULL;
+static lv_obj_t   *s_time_lbl    = NULL;
+static lv_obj_t   *s_wifi_icon   = NULL;
+static lv_obj_t   *s_ws_dot      = NULL;
+static lv_timer_t *s_clock_timer = NULL;
+
+/* ── Clock callback (fires every second) ────────────────────────────── */
+static void clock_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_time_lbl) return;
+
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+
+    /* Year < 2024 → SNTP not yet synced */
+    if (!tm || tm->tm_year < 124) {
+        lv_label_set_text(s_time_lbl, "--:--");
+    } else {
+        char buf[6];
+        snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
+        lv_label_set_text(s_time_lbl, buf);
+    }
+}
+
+/* ── Tile tap handler ───────────────────────────────────────────────── */
 static void tile_click_cb(lv_event_t *e)
 {
-    const tile_desc_t *t = (const tile_desc_t *)lv_event_get_user_data(e);
-    ESP_LOGI(TAG, "Tile tapped: %s → launching '%s'", t->label, t->app_id);
+    const tile_def_t *t = (const tile_def_t *)lv_event_get_user_data(e);
+    if (!t || t->placeholder || !t->app_id) return;
+    ESP_LOGI(TAG, "Tile → '%s'", t->app_id);
     app_registry_launch(t->app_id);
 }
 
-/* -------------------------------------------------------------------------
- * Status dot helper  (green = ok, red = no)
- * ------------------------------------------------------------------------- */
-static lv_obj_t *make_dot(lv_obj_t *parent)
+/* ── Status dot helpers ─────────────────────────────────────────────── */
+static void update_wifi(bool on)
 {
-    lv_obj_t *dot = lv_obj_create(parent);
-    lv_obj_set_size(dot, 10, 10);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_set_style_pad_all(dot, 0, 0);
-    return dot;
+    if (s_wifi_icon)
+        lv_obj_set_style_text_color(s_wifi_icon,
+            lv_color_hex(on ? C_WIFI_ON : C_WIFI_OFF), 0);
 }
 
-static void dot_set_color(lv_obj_t *dot, bool ok)
+static void update_ws(bool on)
 {
-    lv_obj_set_style_bg_color(dot, ok ? lv_color_hex(0x00CC44)
-                                       : lv_color_hex(0xCC3300), 0);
+    if (s_ws_dot)
+        lv_obj_set_style_bg_color(s_ws_dot,
+            lv_color_hex(on ? C_WS_ON : C_WS_OFF), 0);
 }
 
-/* -------------------------------------------------------------------------
- * Build the launcher screen
- * ------------------------------------------------------------------------- */
+/* ── Build the launcher screen ──────────────────────────────────────── */
 static void build_ui(void)
 {
+    /* ---- Screen -------------------------------------------------------- */
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x111111), 0);
+    lv_obj_set_style_bg_color(s_screen, lv_color_hex(C_BG), 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
 
-    /* --- Title bar --- */
-    lv_obj_t *title_bar = lv_obj_create(s_screen);
-    lv_obj_set_size(title_bar, DISPLAY_H_RES, 44);
-    lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(title_bar, lv_color_hex(0x222233), 0);
-    lv_obj_set_style_border_width(title_bar, 0, 0);
-    lv_obj_set_style_radius(title_bar, 0, 0);
-    lv_obj_set_style_pad_left(title_bar, 12, 0);
-    lv_obj_set_style_pad_right(title_bar, 12, 0);
-    lv_obj_set_style_pad_top(title_bar, 0, 0);
-    lv_obj_set_flex_flow(title_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(title_bar,
-                          LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    /* ---- Status bar ---------------------------------------------------- */
+    lv_obj_t *bar = lv_obj_create(s_screen);
+    lv_obj_set_size(bar, DISPLAY_H_RES, STATUS_H);
+    lv_obj_set_pos(bar, 0, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_border_width(bar, 0, 0);
+    lv_obj_set_style_radius(bar, 0, 0);
+    lv_obj_set_style_pad_hor(bar, 18, 0);
+    lv_obj_set_style_pad_ver(bar, 0, 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar,
+        LV_FLEX_ALIGN_SPACE_BETWEEN,
+        LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *title_lbl = lv_label_create(title_bar);
-    lv_label_set_text(title_lbl, "ESP32 OS");
-    lv_obj_set_style_text_color(title_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
+    /* Time — 32 px, left side */
+    s_time_lbl = lv_label_create(bar);
+    lv_label_set_text(s_time_lbl, "--:--");
+    lv_obj_set_style_text_color(s_time_lbl, lv_color_hex(C_TIME), 0);
+    lv_obj_set_style_text_font(s_time_lbl, &lv_font_montserrat_32, 0);
 
-    /* Status dots container */
-    lv_obj_t *dots = lv_obj_create(title_bar);
-    lv_obj_set_size(dots, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(dots, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(dots, 0, 0);
-    lv_obj_set_style_pad_all(dots, 2, 0);
-    lv_obj_set_flex_flow(dots, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(dots, 6, 0);
+    /* Right cluster: WiFi icon + WS dot */
+    lv_obj_t *right = lv_obj_create(bar);
+    lv_obj_set_size(right, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(right, 0, 0);
+    lv_obj_set_style_pad_all(right, 2, 0);
+    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(right,
+        LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(right, 10, 0);
 
-    /* WiFi label + dot */
-    lv_obj_t *wifi_lbl = lv_label_create(dots);
-    lv_label_set_text(wifi_lbl, "WiFi");
-    lv_obj_set_style_text_color(wifi_lbl, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_set_style_text_font(wifi_lbl, &lv_font_montserrat_12, 0);
+    /* WiFi symbol */
+    s_wifi_icon = lv_label_create(right);
+    lv_label_set_text(s_wifi_icon, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_font(s_wifi_icon, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_wifi_icon, lv_color_hex(C_WIFI_OFF), 0);
 
-    s_wifi_dot = make_dot(dots);
+    /* WS dot — 11 × 11 circle */
+    s_ws_dot = lv_obj_create(right);
+    lv_obj_set_size(s_ws_dot, 11, 11);
+    lv_obj_set_style_radius(s_ws_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(s_ws_dot, 0, 0);
+    lv_obj_set_style_pad_all(s_ws_dot, 0, 0);
+    lv_obj_set_style_bg_color(s_ws_dot, lv_color_hex(C_WS_OFF), 0);
 
-    /* WS label + dot */
-    lv_obj_t *ws_lbl = lv_label_create(dots);
-    lv_label_set_text(ws_lbl, "WS");
-    lv_obj_set_style_text_color(ws_lbl, lv_color_hex(0xAAAAAA), 0);
-    lv_obj_set_style_text_font(ws_lbl, &lv_font_montserrat_12, 0);
+    /* 1-px separator */
+    lv_obj_t *sep = lv_obj_create(s_screen);
+    lv_obj_set_size(sep, DISPLAY_H_RES, 1);
+    lv_obj_set_pos(sep, 0, STATUS_H);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(C_SEP), 0);
+    lv_obj_set_style_border_width(sep, 0, 0);
+    lv_obj_set_style_radius(sep, 0, 0);
 
-    s_ws_dot = make_dot(dots);
+    /* ---- App tiles ------------------------------------------------------ */
+    static const int col_x[2] = { COL0_X, COL1_X };
+    static const int row_y[2] = { ROW0_Y, ROW1_Y };
 
-    /* --- Tile grid --- */
-    lv_obj_t *grid = lv_obj_create(s_screen);
-    lv_obj_set_size(grid, DISPLAY_H_RES, DISPLAY_V_RES - 44 - 28);
-    lv_obj_align(grid, LV_ALIGN_TOP_MID, 0, 44);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_pad_all(grid, 12, 0);
-    lv_obj_set_style_pad_column(grid, 12, 0);
-    lv_obj_set_style_pad_row(grid, 12, 0);
-    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(grid,
-                          LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_START,
-                          LV_FLEX_ALIGN_START);
+    for (int i = 0; i < 4; i++) {
+        const tile_def_t *t = &k_tiles[i];
+        int cx = col_x[i & 1];
+        int ry = row_y[i >> 1];
 
-    for (size_t i = 0; i < NUM_TILES; i++) {
-        const tile_desc_t *t = &k_tiles[i];
+        /* ---- Tile container ---- */
+        lv_obj_t *tile = lv_obj_create(s_screen);
+        lv_obj_set_size(tile, TILE_W, TILE_H);
+        lv_obj_set_pos(tile, cx, ry);
+        lv_obj_set_style_bg_color(tile, lv_color_hex(t->bg), 0);
+        lv_obj_set_style_radius(tile, TILE_R, 0);
+        lv_obj_set_style_border_width(tile, 0, 0);
+        lv_obj_set_style_pad_all(tile, 0, 0);
 
-        lv_obj_t *tile = lv_obj_create(grid);
-        lv_obj_set_size(tile, 150, 150);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(0x1E2030), 0);
-        lv_obj_set_style_border_color(tile, lv_color_hex(0x3344AA), 0);
-        lv_obj_set_style_border_width(tile, 1, 0);
-        lv_obj_set_style_radius(tile, 16, 0);
-        lv_obj_set_style_pad_all(tile, 8, 0);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(0x2A3050), LV_STATE_PRESSED);
-        lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(tile,
-                              LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
+        /* Subtle pressed-state: ~14% mix toward white = gentle brightening */
+        lv_color_t pressed_bg = lv_color_mix(
+            lv_color_white(), lv_color_hex(t->bg), 220);  /* 220/255 ≈ 86% bg */
+        lv_obj_set_style_bg_color(tile, pressed_bg, LV_STATE_PRESSED);
 
-        /* Icon */
+        /* ---- Icon label — centred ---- */
         lv_obj_t *icon = lv_label_create(tile);
-        lv_label_set_text(icon, t->icon);
-        lv_obj_set_style_text_color(icon, lv_color_hex(0xCCDDFF), 0);
-        lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
+        lv_label_set_text(icon, t->symbol);
+        lv_obj_set_style_text_font(icon, &lv_font_montserrat_40, 0);
+        lv_obj_set_style_text_color(icon, lv_color_hex(t->icon_col), 0);
+        lv_obj_center(icon);
 
-        /* Label */
-        lv_obj_t *lbl = lv_label_create(tile);
-        lv_label_set_text(lbl, t->label);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        /* Dim icon slightly on press (mirrors tile brightening) */
+        lv_obj_set_style_text_opa(icon, LV_OPA_70, LV_STATE_PRESSED);
 
-        lv_obj_add_event_cb(tile, tile_click_cb, LV_EVENT_CLICKED,
-                            (void *)t);
+        /* Tap callback only for real apps */
+        if (!t->placeholder) {
+            lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(tile, tile_click_cb,
+                                LV_EVENT_CLICKED, (void *)t);
+        } else {
+            lv_obj_clear_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        }
     }
 
-    /* --- Hint bar --- */
-    lv_obj_t *hint_bar = lv_obj_create(s_screen);
-    lv_obj_set_size(hint_bar, DISPLAY_H_RES, 28);
-    lv_obj_align(hint_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(hint_bar, lv_color_hex(0x0A0A0A), 0);
-    lv_obj_set_style_border_width(hint_bar, 0, 0);
-    lv_obj_set_style_radius(hint_bar, 0, 0);
-
-    lv_obj_t *hint = lv_label_create(hint_bar);
-    lv_label_set_text(hint, "Tap to open  •  Hold BOOT to return here");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x666666), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
-    lv_obj_center(hint);
+    /* ---- Clock timer (1 s) -------------------------------------------- */
+    clock_cb(NULL);   /* paint immediately */
+    if (!s_clock_timer)
+        s_clock_timer = lv_timer_create(clock_cb, 1000, NULL);
 }
 
-/* -------------------------------------------------------------------------
- * App lifecycle callbacks
- * ------------------------------------------------------------------------- */
+/* ── App lifecycle callbacks ─────────────────────────────────────────── */
 static esp_err_t launcher_on_enter(app_t *self)
 {
     (void)self;
     ESP_LOGI(TAG, "Launcher enter");
     if (!s_screen) build_ui();
 
-    /* Refresh status dots */
-    dot_set_color(s_wifi_dot, wifi_is_connected());
-    dot_set_color(s_ws_dot,   ws_client_is_connected());
+    update_wifi(wifi_is_connected());
+    update_ws(ws_client_is_connected());
+    clock_cb(NULL);  /* ensure clock shows immediately on re-entry */
 
-    lv_scr_load_anim(s_screen, LV_SCR_LOAD_ANIM_FADE_IN, 200, 0, false);
+    lv_scr_load_anim(s_screen, LV_SCR_LOAD_ANIM_FADE_IN, 250, 0, false);
     return ESP_OK;
 }
 
@@ -226,20 +286,18 @@ static void launcher_on_event(app_t *self, const event_t *evt)
     switch (evt->type) {
         case EVT_WIFI_CONNECTED:
         case EVT_WIFI_DISCONNECTED:
-            dot_set_color(s_wifi_dot, wifi_is_connected());
+            update_wifi(wifi_is_connected());
             break;
         case EVT_WS_CONNECTED:
         case EVT_WS_DISCONNECTED:
-            dot_set_color(s_ws_dot, ws_client_is_connected());
+            update_ws(ws_client_is_connected());
             break;
         default:
             break;
     }
 }
 
-/* -------------------------------------------------------------------------
- * Singleton app_t
- * ------------------------------------------------------------------------- */
+/* ── Singleton ──────────────────────────────────────────────────────── */
 static app_t s_launcher_app = {
     .id       = "launcher",
     .name     = "Launcher",
