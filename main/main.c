@@ -73,40 +73,44 @@ static void application_init_all(void)
 }
 
 /* -------------------------------------------------------------------------
- * app_main_task — waits for WiFi, connects to server, runs LVGL loop.
+ * lvgl_task — drives the LVGL timer loop.
+ * Starts IMMEDIATELY so the screen shows UI regardless of network state.
  * Pinned to Core 0.
  * ------------------------------------------------------------------------- */
-static void app_main_task(void *arg)
+static void lvgl_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "app_main_task started (Core %d)", xPortGetCoreID());
-
-    /* Poll until WiFi is ready */
-    ESP_LOGI(TAG, "Waiting for WiFi...");
-    while (!wifi_is_connected()) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    ESP_LOGI(TAG, "WiFi connected");
-
-    /* Load server URL from config */
-    app_config_t cfg;
-    ESP_ERROR_CHECK(config_get(&cfg));
-
-    ESP_LOGI(TAG, "Connecting to WS: %s", cfg.server_url);
-    esp_err_t ret = ws_client_connect(cfg.server_url);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WS connect failed: %s", esp_err_to_name(ret));
-        /* Non-fatal; ws_client will attempt reconnect internally */
-    }
-
-    application_set_state(APP_STATE_IDLE);
-
-    /* LVGL timer loop */
+    ESP_LOGI(TAG, "LVGL task started (Core %d)", xPortGetCoreID());
     while (1) {
         lv_timer_handler();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    vTaskDelete(NULL);
+}
 
+/* -------------------------------------------------------------------------
+ * net_task — waits for WiFi then connects WebSocket.
+ * Runs independently of LVGL; pinned to Core 1.
+ * ------------------------------------------------------------------------- */
+static void net_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "Net task: waiting for WiFi...");
+    while (!wifi_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_LOGI(TAG, "WiFi connected — connecting WebSocket");
+
+    app_config_t cfg;
+    if (config_get(&cfg) == ESP_OK) {
+        ESP_LOGI(TAG, "WS URL: %s", cfg.server_url);
+        esp_err_t ret = ws_client_connect(cfg.server_url);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "WS connect failed: %s — will retry via events",
+                     esp_err_to_name(ret));
+        }
+    }
+    application_set_state(APP_STATE_IDLE);
     vTaskDelete(NULL);
 }
 
@@ -167,7 +171,7 @@ static void event_handler_task(void *arg)
  * ------------------------------------------------------------------------- */
 static void application_run(void)
 {
-    /* Recording session task — Core 0, high priority */
+    /* Audio recording task — Core 0, highest user priority */
     xTaskCreatePinnedToCore(
         chat_app_record_task,
         "record_task",
@@ -178,22 +182,34 @@ static void application_run(void)
         0
     );
 
-    /* Main app task (WiFi wait + WS connect + LVGL loop) — Core 0 */
+    /* LVGL rendering loop — Core 0, starts immediately (no network dependency) */
     xTaskCreatePinnedToCore(
-        app_main_task,
-        "app_main",
-        4096,
+        lvgl_task,
+        "lvgl",
+        6144,
         NULL,
         4,
         NULL,
         0
     );
 
-    /* Event handler — Core 1 */
+    /* Network task — waits for WiFi then connects WS (Core 1)
+     * ws_client_connect uses mbedTLS which needs ~6KB of stack */
+    xTaskCreatePinnedToCore(
+        net_task,
+        "net_task",
+        8192,
+        NULL,
+        3,
+        NULL,
+        1
+    );
+
+    /* Event handler — processes event_bus queue (Core 1) */
     xTaskCreatePinnedToCore(
         event_handler_task,
         "evt_handler",
-        3072,
+        4096,
         NULL,
         3,
         NULL,

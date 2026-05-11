@@ -53,8 +53,29 @@ static const char *TAG = "DISPLAY_DRV";
 /* -------------------------------------------------------------------------
  * LVGL tunables
  * ------------------------------------------------------------------------- */
-#define LVGL_BUF_LINES      (DISPLAY_V_RES / 4)   /* 112 lines × 368 px */
+/* 20 lines of internal-SRAM DMA buffer — reliable, ~15KB each, no PSRAM issues */
+#define LVGL_BUF_LINES      20
 #define LVGL_TICK_PERIOD_US (2 * 1000)             /* 2 ms in µs for esp_timer */
+
+/* -------------------------------------------------------------------------
+ * SH8601 custom init sequence
+ *
+ * The default driver sequence is missing two critical commands:
+ *   • 0x11 (SLPOUT)  — without this the panel stays in sleep after reset
+ *   • 0x51 (WRDISBV) — without this brightness defaults to 0 (invisible)
+ * ------------------------------------------------------------------------- */
+static const sh8601_lcd_init_cmd_t s_sh8601_init_cmds[] = {
+    /* Exit sleep mode — MUST be first, panel ignores all other cmds while sleeping */
+    {0x11, NULL, 0, 120},
+    /* Set tear scanline for V-blank sync */
+    {0x44, (uint8_t[]){0x00, 0xC8}, 2, 0},
+    /* Tearing Effect Line On (V-blank) */
+    {0x35, (uint8_t[]){0x00}, 0, 0},
+    /* WRCTRLD: enable brightness control block */
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    /* WRDISBV: set brightness to maximum (0xFF) */
+    {0x51, (uint8_t[]){0xFF}, 1, 10},
+};
 
 /* -------------------------------------------------------------------------
  * Static state
@@ -243,8 +264,10 @@ esp_err_t display_driver_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
         (esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io_handle));
 
-    /* --- SH8601 vendor config (default init sequence from driver) --- */
+    /* --- SH8601 vendor config: custom init with SLPOUT + brightness --- */
     sh8601_vendor_config_t vendor_cfg = {
+        .init_cmds      = s_sh8601_init_cmds,
+        .init_cmds_size = sizeof(s_sh8601_init_cmds) / sizeof(s_sh8601_init_cmds[0]),
         .flags.use_qspi_interface = 1,
     };
 
@@ -292,17 +315,23 @@ esp_err_t display_driver_init(void)
     /* --- LVGL init --- */
     lv_init();
 
-    /* Double-buffered DMA draw buffer in PSRAM */
-    lv_color_t *buf1 = heap_caps_malloc(
-        DISPLAY_H_RES * LVGL_BUF_LINES * sizeof(lv_color_t),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
-    lv_color_t *buf2 = heap_caps_malloc(
-        DISPLAY_H_RES * LVGL_BUF_LINES * sizeof(lv_color_t),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    /* Double-buffered draw buffers.
+     *
+     * Allocate from internal SRAM with DMA capability.
+     * MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA is invalid on ESP32-S3 (PSRAM is not
+     * tagged DMA-capable by the heap allocator), so we use internal SRAM here.
+     * 20 lines × 368 px × 2 bytes = 14,720 bytes per buffer — easily fits.
+     */
+    const size_t buf_sz = DISPLAY_H_RES * LVGL_BUF_LINES * sizeof(lv_color_t);
+    lv_color_t *buf1 = heap_caps_malloc(buf_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    lv_color_t *buf2 = heap_caps_malloc(buf_sz, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!buf1 || !buf2) {
-        ESP_LOGE(TAG, "LVGL draw buffer alloc failed");
+        ESP_LOGE(TAG, "LVGL draw buffer alloc failed (need %u bytes x2 internal DMA)",
+                 (unsigned)buf_sz);
+        free(buf1); free(buf2);
         return ESP_ERR_NO_MEM;
     }
+    ESP_LOGI(TAG, "LVGL draw buffers: 2 × %u bytes (internal DMA)", (unsigned)buf_sz);
     lv_disp_draw_buf_init(&s_draw_buf, buf1, buf2,
                           DISPLAY_H_RES * LVGL_BUF_LINES);
 
