@@ -33,10 +33,12 @@
 #include "wifi_manager.h"
 #include "ws_protocol.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "lvgl.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 static const char *TAG = "LAUNCHER";
 
@@ -106,6 +108,10 @@ static lv_obj_t   *s_wifi_icon   = NULL;
 static lv_obj_t   *s_ws_dot      = NULL;
 static lv_timer_t *s_clock_timer = NULL;
 
+/* Canvas pixel buffers — one per tile, allocated from PSRAM at build_ui time */
+#define ICON_SZ  80
+static uint8_t *s_icon_bufs[4];
+
 /* ── Clock callback (fires every second) ────────────────────────────── */
 static void clock_cb(lv_timer_t *t)
 {
@@ -149,6 +155,57 @@ static void update_ws(bool on)
             lv_color_hex(on ? C_WS_ON : C_WS_OFF), 0);
 }
 
+/* ── Drawn tile icons ────────────────────────────────────────────────
+ * Each icon is an 80×80 ARGB canvas drawn with geometric primitives.
+ * Shapes sit on a fully transparent background so the tile colour
+ * shows through.  No font glyphs — real filled figures only.
+ * ----------------------------------------------------------------------- */
+static lv_obj_t *make_tile_icon(lv_obj_t *parent, const tile_def_t *t, uint8_t *buf)
+{
+    lv_obj_t *canvas = lv_canvas_create(parent);
+    lv_canvas_set_buffer(canvas, buf, ICON_SZ, ICON_SZ, LV_IMG_CF_TRUE_COLOR_ALPHA);
+
+    /* Clear to fully transparent (alpha=0) */
+    memset(buf, 0, ICON_SZ * ICON_SZ * 4);
+    lv_canvas_fill_bg(canvas, lv_color_black(), LV_OPA_TRANSP);
+
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color     = lv_color_hex(t->icon_col);
+    rd.bg_opa       = LV_OPA_COVER;
+    rd.border_width = 0;
+
+    if (!t->placeholder && t->app_id && strcmp(t->app_id, "chat") == 0) {
+        /* ── Microphone ─────────────────────────────────────────────────
+         *  Capsule head, thin arm, wide base — classic mic silhouette.
+         * ---------------------------------------------------------------- */
+        rd.radius = 18; lv_canvas_draw_rect(canvas, 22,  5, 36, 44, &rd); /* capsule */
+        rd.radius =  3; lv_canvas_draw_rect(canvas, 36, 47,  8, 16, &rd); /* arm     */
+        rd.radius =  4; lv_canvas_draw_rect(canvas, 20, 61, 40,  8, &rd); /* base    */
+
+    } else if (!t->placeholder && t->app_id && strcmp(t->app_id, "settings") == 0) {
+        /* ── Radial gear — centre circle + 8 surrounding dots ──────────── */
+        rd.radius = LV_RADIUS_CIRCLE;
+        lv_canvas_draw_rect(canvas, 29, 29, 22, 22, &rd); /* centre circle */
+        for (int i = 0; i < 8; i++) {
+            float a  = i * (float)M_PI / 4.0f;
+            int   cx = (int)(40.5f + 26.0f * cosf(a)) - 6;
+            int   cy = (int)(40.5f + 26.0f * sinf(a)) - 6;
+            lv_canvas_draw_rect(canvas, cx, cy, 12, 12, &rd);
+        }
+
+    } else {
+        /* ── Plus / placeholder ─────────────────────────────────────────── */
+        rd.radius = 4;
+        lv_canvas_draw_rect(canvas, 16, 36, 48,  8, &rd); /* horizontal bar */
+        lv_canvas_draw_rect(canvas, 36, 16,  8, 48, &rd); /* vertical bar   */
+    }
+
+    lv_obj_set_style_opa(canvas, LV_OPA_70, LV_STATE_PRESSED); /* dim on tap */
+    lv_obj_center(canvas);
+    return canvas;
+}
+
 /* ── Build the launcher screen ──────────────────────────────────────── */
 static void build_ui(void)
 {
@@ -158,27 +215,29 @@ static void build_ui(void)
     lv_obj_set_style_pad_all(s_screen, 0, 0);
     lv_obj_set_style_border_width(s_screen, 0, 0);
 
-    /* ---- Status bar ---------------------------------------------------- */
+    /* ---- Status bar — transparent so screen bg shows through ---------- */
     lv_obj_t *bar = lv_obj_create(s_screen);
     lv_obj_set_size(bar, DISPLAY_H_RES, STATUS_H);
     lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);   /* transparent overlay */
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_hor(bar, 18, 0);
+    lv_obj_set_style_pad_left(bar, 18, 0);
+    lv_obj_set_style_pad_right(bar, 14, 0);
     lv_obj_set_style_pad_ver(bar, 0, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar,
-        LV_FLEX_ALIGN_SPACE_BETWEEN,
+        LV_FLEX_ALIGN_START,
         LV_FLEX_ALIGN_CENTER,
         LV_FLEX_ALIGN_CENTER);
 
-    /* Time — 32 px, left side */
+    /* Time — 32 px, grows to fill the left space, pushing WiFi to far right */
     s_time_lbl = lv_label_create(bar);
     lv_label_set_text(s_time_lbl, "--:--");
     lv_obj_set_style_text_color(s_time_lbl, lv_color_hex(C_TIME), 0);
     lv_obj_set_style_text_font(s_time_lbl, &lv_font_montserrat_32, 0);
     lv_obj_set_style_bg_color(s_time_lbl, lv_color_hex(C_BG), 0); /* AA blend bg */
+    lv_obj_set_flex_grow(s_time_lbl, 1);   /* take all spare width */
 
     /* Right cluster: WiFi icon + WS dot */
     lv_obj_t *right = lv_obj_create(bar);
@@ -218,6 +277,16 @@ static void build_ui(void)
     static const int col_x[2] = { COL0_X, COL1_X };
     static const int row_y[2] = { ROW0_Y, ROW1_Y };
 
+    /* Allocate icon canvas buffers from PSRAM (persistent for lifetime of app) */
+    for (int i = 0; i < 4; i++) {
+        if (!s_icon_bufs[i]) {
+            s_icon_bufs[i] = heap_caps_malloc(ICON_SZ * ICON_SZ * 4, MALLOC_CAP_SPIRAM);
+            if (!s_icon_bufs[i]) {
+                ESP_LOGE(TAG, "Failed to alloc icon buf %d from PSRAM", i);
+            }
+        }
+    }
+
     for (int i = 0; i < 4; i++) {
         const tile_def_t *t = &k_tiles[i];
         int cx = col_x[i & 1];
@@ -232,21 +301,15 @@ static void build_ui(void)
         lv_obj_set_style_border_width(tile, 0, 0);
         lv_obj_set_style_pad_all(tile, 0, 0);
 
-        /* Subtle pressed-state: ~14% mix toward white = gentle brightening */
+        /* Subtle pressed-state: gentle brightening */
         lv_color_t pressed_bg = lv_color_mix(
-            lv_color_white(), lv_color_hex(t->bg), 220);  /* 220/255 ≈ 86% bg */
+            lv_color_white(), lv_color_hex(t->bg), 220);
         lv_obj_set_style_bg_color(tile, pressed_bg, LV_STATE_PRESSED);
 
-        /* ---- Icon label — centred ---- */
-        lv_obj_t *icon = lv_label_create(tile);
-        lv_label_set_text(icon, t->symbol);
-        lv_obj_set_style_text_font(icon, &lv_font_montserrat_40, 0);
-        lv_obj_set_style_text_color(icon, lv_color_hex(t->icon_col), 0);
-        lv_obj_set_style_bg_color(icon, lv_color_hex(t->bg), 0);  /* AA blend bg */
-        lv_obj_center(icon);
-
-        /* Dim icon slightly on press (mirrors tile brightening) */
-        lv_obj_set_style_text_opa(icon, LV_OPA_70, LV_STATE_PRESSED);
+        /* ---- Canvas icon — drawn geometric figure, centred ---- */
+        if (s_icon_bufs[i]) {
+            make_tile_icon(tile, t, s_icon_bufs[i]);
+        }
 
         /* Tap callback only for real apps */
         if (!t->placeholder) {
