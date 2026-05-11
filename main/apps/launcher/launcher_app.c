@@ -41,16 +41,16 @@
 static const char *TAG = "LAUNCHER";
 
 /* ── Colour palette ──────────────────────────────────────────────────────
- * All values are 0xRRGGBB.
- * The dark palette lets AMOLED pixels switch off (true black = no light).
+ * Soft, low-saturation tones.  Near-black bg lets AMOLED pixels turn off.
+ * No high-saturation colours — everything is slightly milky / gray.
  * ----------------------------------------------------------------------- */
-#define C_BG        0x09090F   /* Screen background — near black            */
-#define C_SEP       0x18182A   /* 1-px separator under status bar           */
-#define C_TIME      0xF5F5F5   /* Clock text                                */
-#define C_WIFI_ON   0x34C759   /* Apple green — connected                   */
+#define C_BG        0x09090F   /* Screen background — true AMOLED black     */
+#define C_SEP       0x16162A   /* 1-px separator under status bar           */
+#define C_TIME      0xC0C0CA   /* Clock — soft milky white (not pure white) */
+#define C_WIFI_ON   0x6A9474   /* Sage green — connected (desaturated)      */
 #define C_WIFI_OFF  0x3A3A52   /* Muted grey — disconnected                 */
-#define C_WS_ON     0x34C759
-#define C_WS_OFF    0x3A3A52
+#define C_WS_ON     0x6A9474   /* Same sage green for WS dot                */
+#define C_WS_OFF    0x2E2E44   /* Slightly darker when off                  */
 
 /* ── Tile colour table ───────────────────────────────────────────────────
  * Each tile carries its own identity colour.  Pressed variant is ~12%
@@ -66,10 +66,13 @@ typedef struct {
 
 static const tile_def_t k_tiles[4] = {
     /*  id          symbol              bg        icon_col  placeholder */
-    { "chat",     LV_SYMBOL_AUDIO,    0x163060, 0x5BAFFF, false },
-    { "settings", LV_SYMBOL_SETTINGS, 0x212130, 0xA0A8C8, false },
-    { NULL,       LV_SYMBOL_PLUS,     0x0E0E16, 0x25253A, true  },
-    { NULL,       LV_SYMBOL_PLUS,     0x0E0E16, 0x25253A, true  },
+    /*  Chat: very dark cool-navy bg, soft slate-blue icon              */
+    { "chat",     LV_SYMBOL_AUDIO,    0x111A28, 0x7A9AB8, false },
+    /*  Settings: near-black warm-gray bg, light gray icon              */
+    { "settings", LV_SYMBOL_SETTINGS, 0x1A1A24, 0x8888A0, false },
+    /*  Placeholders: nearly invisible                                   */
+    { NULL,       LV_SYMBOL_PLUS,     0x0D0D14, 0x222232, true  },
+    { NULL,       LV_SYMBOL_PLUS,     0x0D0D14, 0x222232, true  },
 };
 
 /* ── Layout constants ────────────────────────────────────────────────────

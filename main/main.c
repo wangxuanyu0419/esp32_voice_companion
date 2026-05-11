@@ -106,13 +106,13 @@ static void net_task(void *arg)
     }
     ESP_LOGI(TAG, "WiFi connected — syncing time + connecting WebSocket");
 
-    /* SNTP time sync — set UTC, server will keep wall-clock accurate */
+    /* SNTP time sync — Berlin timezone (CET/CEST, auto DST switching) */
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
-    setenv("TZ", "UTC0", 1);
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     tzset();
     esp_sntp_init();
-    ESP_LOGI(TAG, "SNTP started (pool.ntp.org, UTC)");
+    ESP_LOGI(TAG, "SNTP started (pool.ntp.org, Berlin/CEST)");
 
     app_config_t cfg;
     if (config_get(&cfg) == ESP_OK) {

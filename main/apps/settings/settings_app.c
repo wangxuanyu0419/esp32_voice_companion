@@ -62,6 +62,21 @@ static uint8_t timeout_to_idx(uint16_t secs)
 /* -------------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------------- */
+/* ── Shared palette ──────────────────────────────────────────────────────
+ * Soft, low-saturation tones — no punchy colours anywhere.
+ * ----------------------------------------------------------------------- */
+#define S_BG          0x0A0A10   /* screen background                       */
+#define S_ROW_BG      0x111118   /* info-row card background                */
+#define S_KEY         0x6E6E82   /* muted gray-purple for key labels        */
+#define S_VAL         0xBEBEC8   /* soft milky white for value labels       */
+#define S_HDR         0xC0C0CA   /* header / title text                     */
+#define S_ACCENT      0x7A8A9E   /* muted slate-blue for icons / headings   */
+#define S_ONLINE      0x6A9474   /* desaturated sage-green  (connected)     */
+#define S_OFFLINE     0x8A6A6A   /* desaturated dusty-rose  (disconnected)  */
+#define S_SEP         0x18182A   /* thin separator line                     */
+#define S_DD_BG       0x161620   /* dropdown button / list background       */
+#define S_DD_SEL      0x1E2A3A   /* selected-item highlight in dropdown     */
+
 static lv_obj_t *make_row(lv_obj_t *parent,
                            const char *key,
                            const char *val_init,
@@ -69,12 +84,12 @@ static lv_obj_t *make_row(lv_obj_t *parent,
 {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row, lv_color_hex(0x111120), 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(S_ROW_BG), 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_100, 0);
     lv_obj_set_style_radius(row, 10, 0);
     lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_ver(row, 10, 0);
-    lv_obj_set_style_pad_hor(row, 14, 0);
+    lv_obj_set_style_pad_ver(row, 13, 0);
+    lv_obj_set_style_pad_hor(row, 16, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row,
                           LV_FLEX_ALIGN_SPACE_BETWEEN,
@@ -83,13 +98,13 @@ static lv_obj_t *make_row(lv_obj_t *parent,
 
     lv_obj_t *key_lbl = lv_label_create(row);
     lv_label_set_text(key_lbl, key);
-    lv_obj_set_style_text_color(key_lbl, lv_color_hex(0x8080A0), 0);
-    lv_obj_set_style_text_font(key_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(key_lbl, lv_color_hex(S_KEY), 0);
+    lv_obj_set_style_text_font(key_lbl, &lv_font_montserrat_18, 0);
 
     lv_obj_t *val_lbl = lv_label_create(row);
     lv_label_set_text(val_lbl, val_init);
-    lv_obj_set_style_text_color(val_lbl, lv_color_hex(0xE8E8F8), 0);
-    lv_obj_set_style_text_font(val_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(val_lbl, lv_color_hex(S_VAL), 0);
+    lv_obj_set_style_text_font(val_lbl, &lv_font_montserrat_20, 0);
 
     if (val_out) *val_out = val_lbl;
     return row;
@@ -101,19 +116,17 @@ static void refresh_dynamic_rows(void)
 
     /* WiFi */
     lv_label_set_text(s_wifi_val,
-        wifi_is_connected() ? "Connected  " LV_SYMBOL_OK
-                            : "Disconnected");
+        wifi_is_connected() ? "Connected" : "Disconnected");
     lv_obj_set_style_text_color(s_wifi_val,
-        wifi_is_connected() ? lv_color_hex(0x44FF88)
-                            : lv_color_hex(0xFF4444), 0);
+        wifi_is_connected() ? lv_color_hex(S_ONLINE)
+                            : lv_color_hex(S_OFFLINE), 0);
 
     /* WebSocket */
     lv_label_set_text(s_ws_val,
-        ws_client_is_connected() ? "Connected  " LV_SYMBOL_OK
-                                 : "Disconnected");
+        ws_client_is_connected() ? "Connected" : "Disconnected");
     lv_obj_set_style_text_color(s_ws_val,
-        ws_client_is_connected() ? lv_color_hex(0x44FF88)
-                                 : lv_color_hex(0xFF4444), 0);
+        ws_client_is_connected() ? lv_color_hex(S_ONLINE)
+                                 : lv_color_hex(S_OFFLINE), 0);
 
     /* Free heap */
     char buf[32];
@@ -146,31 +159,31 @@ static void back_btn_cb(lv_event_t *e)
  * Sleep timeout dropdowns
  * ------------------------------------------------------------------------- */
 
-/* Style a dropdown to match the dark AMOLED theme */
+/* Style a dropdown to match the soft muted palette */
 static void style_dropdown(lv_obj_t *dd)
 {
     /* Button face */
-    lv_obj_set_style_bg_color(dd,      lv_color_hex(0x1A1A2E), 0);
-    lv_obj_set_style_bg_opa(dd,        LV_OPA_100, 0);
-    lv_obj_set_style_border_color(dd,  lv_color_hex(0x2A2A44), 0);
-    lv_obj_set_style_border_width(dd,  1, 0);
-    lv_obj_set_style_radius(dd,        8, 0);
-    lv_obj_set_style_text_color(dd,    lv_color_hex(0xE8E8F8), 0);
-    lv_obj_set_style_text_font(dd,     &lv_font_montserrat_16, 0);
-    lv_obj_set_style_pad_hor(dd,       12, 0);
-    lv_obj_set_style_pad_ver(dd,       8,  0);
+    lv_obj_set_style_bg_color(dd,     lv_color_hex(S_DD_BG), 0);
+    lv_obj_set_style_bg_opa(dd,       LV_OPA_100, 0);
+    lv_obj_set_style_border_color(dd, lv_color_hex(0x28283A), 0);
+    lv_obj_set_style_border_width(dd, 1, 0);
+    lv_obj_set_style_radius(dd,       8, 0);
+    lv_obj_set_style_text_color(dd,   lv_color_hex(S_VAL), 0);
+    lv_obj_set_style_text_font(dd,    &lv_font_montserrat_18, 0);
+    lv_obj_set_style_pad_hor(dd,      12, 0);
+    lv_obj_set_style_pad_ver(dd,      9,  0);
 
     /* Drop-down list */
     lv_obj_t *list = lv_dropdown_get_list(dd);
-    lv_obj_set_style_bg_color(list,    lv_color_hex(0x1A1A2E), 0);
-    lv_obj_set_style_border_color(list, lv_color_hex(0x2A2A44), 0);
+    lv_obj_set_style_bg_color(list,    lv_color_hex(S_DD_BG), 0);
+    lv_obj_set_style_border_color(list, lv_color_hex(0x28283A), 0);
     lv_obj_set_style_border_width(list, 1, 0);
-    lv_obj_set_style_text_color(list,  lv_color_hex(0xE8E8F8), 0);
-    lv_obj_set_style_text_font(list,   &lv_font_montserrat_16, 0);
-    /* Selected item highlight */
-    lv_obj_set_style_bg_color(list,    lv_color_hex(0x163060),
+    lv_obj_set_style_text_color(list,  lv_color_hex(S_VAL), 0);
+    lv_obj_set_style_text_font(list,   &lv_font_montserrat_18, 0);
+    /* Selected item — muted blue-gray highlight */
+    lv_obj_set_style_bg_color(list,   lv_color_hex(S_DD_SEL),
                                LV_PART_SELECTED | LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(list,      LV_OPA_100,
+    lv_obj_set_style_bg_opa(list,     LV_OPA_100,
                              LV_PART_SELECTED | LV_STATE_CHECKED);
 }
 
@@ -196,8 +209,8 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0x8080A0), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(S_KEY), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
 
     lv_obj_t *dd = lv_dropdown_create(row);
     lv_dropdown_set_options(dd, options);
@@ -242,14 +255,14 @@ static void build_ui(void)
     config_get(&cfg);
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x09090F), 0);
+    lv_obj_set_style_bg_color(s_screen, lv_color_hex(S_BG), 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
 
-    /* --- Header (matches launcher status bar style) --- */
+    /* --- Header --- */
     lv_obj_t *hdr = lv_obj_create(s_screen);
-    lv_obj_set_size(hdr, DISPLAY_H_RES, 52);
+    lv_obj_set_size(hdr, DISPLAY_H_RES, 56);
     lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(hdr, lv_color_hex(0x09090F), 0);
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(S_BG), 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
     lv_obj_set_style_radius(hdr, 0, 0);
     lv_obj_set_style_pad_hor(hdr, 14, 0);
@@ -259,11 +272,11 @@ static void build_ui(void)
                           LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
 
-    /* Back chevron — ghost-style, no background box */
+    /* Back chevron — ghost button */
     lv_obj_t *back_btn = lv_btn_create(hdr);
-    lv_obj_set_size(back_btn, 36, 36);
+    lv_obj_set_size(back_btn, 38, 38);
     lv_obj_set_style_bg_opa(back_btn, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_opa(back_btn, LV_OPA_30, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(back_btn, LV_OPA_20, LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(back_btn, lv_color_white(), LV_STATE_PRESSED);
     lv_obj_set_style_radius(back_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
@@ -273,37 +286,38 @@ static void build_ui(void)
 
     lv_obj_t *back_lbl = lv_label_create(back_btn);
     lv_label_set_text(back_lbl, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(back_lbl, lv_color_hex(0x5BAFFF), 0);
-    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(back_lbl, lv_color_hex(S_ACCENT), 0);
+    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(back_lbl);
 
     lv_obj_t *title = lv_label_create(hdr);
     lv_label_set_text(title, "  Settings");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xF5F5F5), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(S_HDR), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
 
     /* Thin separator */
     lv_obj_t *sep0 = lv_obj_create(s_screen);
     lv_obj_set_size(sep0, DISPLAY_H_RES, 1);
-    lv_obj_set_pos(sep0, 0, 52);
-    lv_obj_set_style_bg_color(sep0, lv_color_hex(0x18182A), 0);
+    lv_obj_set_pos(sep0, 0, 56);
+    lv_obj_set_style_bg_color(sep0, lv_color_hex(S_SEP), 0);
     lv_obj_set_style_border_width(sep0, 0, 0);
     lv_obj_set_style_radius(sep0, 0, 0);
 
     /* --- Content area --- */
     lv_obj_t *content = lv_obj_create(s_screen);
-    lv_obj_set_size(content, DISPLAY_H_RES, DISPLAY_V_RES - 53);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 53);
-    lv_obj_set_style_bg_opa(content, LV_OPA_TRANSP, 0);
+    lv_obj_set_size(content, DISPLAY_H_RES, DISPLAY_V_RES - 57);
+    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 57);
+    lv_obj_set_style_bg_color(content, lv_color_hex(S_BG), 0);
+    lv_obj_set_style_bg_opa(content, LV_OPA_100, 0);
     lv_obj_set_style_border_width(content, 0, 0);
     lv_obj_set_style_pad_hor(content, 16, 0);
-    lv_obj_set_style_pad_ver(content, 12, 0);
+    lv_obj_set_style_pad_ver(content, 14, 0);
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(content,
                           LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(content, 6, 0);
+    lv_obj_set_style_pad_row(content, 7, 0);
 
     /* Static rows */
     char buf[64];
@@ -334,7 +348,7 @@ static void build_ui(void)
     /* Separator */
     lv_obj_t *sep = lv_obj_create(content);
     lv_obj_set_size(sep, DISPLAY_H_RES - 32, 1);
-    lv_obj_set_style_bg_color(sep, lv_color_hex(0x18182A), 0);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(S_SEP), 0);
     lv_obj_set_style_border_width(sep, 0, 0);
     lv_obj_set_style_pad_all(sep, 0, 0);
 
@@ -347,15 +361,15 @@ static void build_ui(void)
     /* --- Sleep settings separator --- */
     lv_obj_t *sep2 = lv_obj_create(content);
     lv_obj_set_size(sep2, DISPLAY_H_RES - 32, 1);
-    lv_obj_set_style_bg_color(sep2, lv_color_hex(0x18182A), 0);
+    lv_obj_set_style_bg_color(sep2, lv_color_hex(S_SEP), 0);
     lv_obj_set_style_border_width(sep2, 0, 0);
     lv_obj_set_style_pad_all(sep2, 0, 0);
 
     /* Section label */
     lv_obj_t *sleep_hdr = lv_label_create(content);
     lv_label_set_text(sleep_hdr, LV_SYMBOL_POWER "  Display Sleep");
-    lv_obj_set_style_text_color(sleep_hdr, lv_color_hex(0x5BAFFF), 0);
-    lv_obj_set_style_text_font(sleep_hdr, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(sleep_hdr, lv_color_hex(S_ACCENT), 0);
+    lv_obj_set_style_text_font(sleep_hdr, &lv_font_montserrat_18, 0);
     lv_obj_set_style_pad_left(sleep_hdr, 4, 0);
 
     /* Dim + sleep dropdowns */
