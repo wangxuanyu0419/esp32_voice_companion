@@ -1,0 +1,20 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+
+# Managed components (re-downloaded by idf_component_manager)
+managed_components/
+
+# IDE / editor
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Claude internal
+.claude/
+.hermes/
+
+# Python cache
+__pycache__/
+*.pyc

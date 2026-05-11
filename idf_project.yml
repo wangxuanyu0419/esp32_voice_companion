@@ -1,0 +1,16 @@
+{
+  "name": "esp32_voice_companion",
+  "version": "1.0.0",
+  "description": "ESP32-S3 Voice Companion - ClawChat style voice interaction device",
+  "target": "esp32s3",
+  "maintainer": "主人",
+  "sdkconfig_defaults": [
+    "sdkconfig.defaults"
+  ],
+  "dependencies": {
+    "espressif/esp-websocket-client": "^2.1.0",
+    "espressif/json": "*",
+    "espressif/esp_lcd": "*",
+    "lvgl/lvgl": "^8.4.0"
+  }
+}

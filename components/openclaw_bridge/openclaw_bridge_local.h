@@ -1,0 +1,9 @@
+#ifndef OPENCLAW_BRIDGE_LOCAL_H
+#define OPENCLAW_BRIDGE_LOCAL_H
+
+#define CLAWCHAT_WS_HOST "clawchat.xuanyu.uk"
+#define CLAWCHAT_WS_PORT 443
+#define CLAWCHAT_WS_SECURE 1
+#define CLAWCHAT_APP_TOKEN "qRsSnjVCBb0AKMGYDyjVj1MQXY9Pjs0xrFS2KtAAEy8iCDLw0xsXlMYtIiJrdhPA"
+
+#endif
