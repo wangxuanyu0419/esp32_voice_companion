@@ -23,6 +23,7 @@ typedef struct {
     lv_color_t low_battery;        /* low-battery warning         */
     lv_color_t card;               /* tile / info card background */
     lv_color_t card_empty;         /* placeholder tile background */
+    lv_color_t card_pressed;       /* tile pressed state          */
 } ui_theme_t;
 
 /* ── API ──────────────────────────────────────────────────────────────────── */

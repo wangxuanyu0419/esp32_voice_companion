@@ -37,6 +37,7 @@ void ui_theme_init(void)
     s_dark_theme.low_battery      = lv_color_hex(0xFF3333);
     s_dark_theme.card             = lv_color_hex(0x161B22);
     s_dark_theme.card_empty       = lv_color_hex(0x0F1318);
+    s_dark_theme.card_pressed     = lv_color_hex(0x1E2A3A);
 
     /* ── Light theme — Xiaozhi spec ──────────────────────────────────────────
      *   bg / chat_bg  : #FFFFFF  (pure white, matching spec)
@@ -56,11 +57,12 @@ void ui_theme_init(void)
     s_light_theme.assistant_bubble = lv_color_hex(0xF0F0F0);
     s_light_theme.system_bubble    = lv_color_hex(0xE8E8E8);
     s_light_theme.system_text      = lv_color_hex(0x666666);
-    s_light_theme.border           = lv_color_hex(0xE0E0E0);
+    s_light_theme.border           = lv_color_hex(0xEFE2CC);
     s_light_theme.accent           = lv_color_hex(0x18DFF2);
     s_light_theme.low_battery      = lv_color_hex(0xFF3B30);
-    s_light_theme.card             = lv_color_hex(0xF5F5F5);
-    s_light_theme.card_empty       = lv_color_hex(0xEBEBEB);
+    s_light_theme.card             = lv_color_hex(0xFFF7E8);
+    s_light_theme.card_empty       = lv_color_hex(0xF1E5D2);
+    s_light_theme.card_pressed     = lv_color_hex(0xF1E5D2);
 
     /* Mark colours as ready; DO NOT reset s_dark */
     s_colors_init = true;

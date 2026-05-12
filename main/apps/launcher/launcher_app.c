@@ -113,10 +113,8 @@ static void build_ui(void)
         lv_obj_set_style_bg_color(card, th->card, 0);
         lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
 
-        /* Press highlight: tint toward accent */
-        lv_obj_set_style_bg_color(card,
-            lv_color_mix(th->accent, th->card, 32),
-            LV_STATE_PRESSED);
+        /* Press highlight */
+        lv_obj_set_style_bg_color(card, th->card_pressed, LV_STATE_PRESSED);
 
         /* Icon */
         if (t->icon) {
