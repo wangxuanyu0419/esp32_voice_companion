@@ -199,6 +199,15 @@ static app_t s_launcher_app = {
 
 app_t *launcher_app_get(void) { return &s_launcher_app; }
 
+void launcher_app_reset_screen(void)
+{
+    if (s_screen) {
+        lv_obj_del(s_screen);
+        s_screen     = NULL;
+        s_status_bar = NULL;
+    }
+}
+
 esp_err_t launcher_app_init(void)
 {
     ui_theme_init();

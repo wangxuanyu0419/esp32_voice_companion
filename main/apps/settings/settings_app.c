@@ -26,6 +26,9 @@
 #include "ui_theme.h"
 #include "ui_fonts.h"
 #include "ui_status_bar.h"
+#include "launcher_app.h"
+#include "scene_chat.h"
+#include "scene_avatar.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -218,6 +221,49 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
     return dd;
 }
 
+/* forward declaration */
+static void build_ui(void);
+
+/* -------------------------------------------------------------------------
+ * Theme toggle
+ * ------------------------------------------------------------------------- */
+static void theme_toggle_cb(lv_event_t *e)
+{
+    lv_obj_t *sw   = lv_event_get_target(e);
+    bool      dark = lv_obj_has_state(sw, LV_STATE_CHECKED);
+
+    /* 1. Persist */
+    app_config_t cfg = {0};
+    config_get(&cfg);
+    cfg.dark_theme = dark;
+    config_save(&cfg);
+
+    /* 2. Apply theme */
+    ui_theme_set_dark(dark);
+
+    /* 3. Invalidate all screens so they rebuild with the new theme */
+    launcher_app_reset_screen();
+    scene_chat_reset();
+    avatar_reset_screen();
+
+    /* 4. Rebuild settings screen in-place */
+    if (s_refresh_timer) { lv_timer_del(s_refresh_timer); s_refresh_timer = NULL; }
+    lv_obj_del(s_screen);
+    s_screen     = NULL;
+    s_status_bar = NULL;
+    s_wifi_val   = NULL;
+    s_ws_val     = NULL;
+    s_heap_val   = NULL;
+    s_uptime_val = NULL;
+    s_dim_dd     = NULL;
+    s_sleep_dd   = NULL;
+
+    build_ui();
+    lv_scr_load(s_screen);
+
+    ESP_LOGI(TAG, "Theme → %s", dark ? "dark" : "light");
+}
+
 static void dim_dd_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -365,6 +411,45 @@ static void build_ui(void)
 
     make_row(content, LV_SYMBOL_LIST "  Free heap", "—", &s_heap_val);
     make_row(content, LV_SYMBOL_REFRESH "  Uptime", "—", &s_uptime_val);
+
+    /* --- Theme toggle --- */
+    lv_obj_t *sep_theme = lv_obj_create(content);
+    lv_obj_set_size(sep_theme, DISPLAY_H_RES - 32, 1);
+    lv_obj_set_style_bg_color(sep_theme, th->border, 0);
+    lv_obj_set_style_border_width(sep_theme, 0, 0);
+    lv_obj_set_style_pad_all(sep_theme, 0, 0);
+
+    {
+        lv_obj_t *row = lv_obj_create(content);
+        lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(row, th->card, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(row, 10, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_ver(row, 10, 0);
+        lv_obj_set_style_pad_hor(row, 16, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                   LV_FLEX_ALIGN_CENTER,
+                                   LV_FLEX_ALIGN_CENTER);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, "Dark Mode");
+        lv_obj_set_style_text_color(lbl, th->text_dim, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_TEXT, 0);
+        lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
+
+        lv_obj_t *sw = lv_switch_create(row);
+        lv_obj_set_size(sw, 52, 28);
+        /* Style the switch track */
+        lv_obj_set_style_bg_color(sw, th->border, 0);
+        lv_obj_set_style_bg_color(sw, th->accent, LV_STATE_CHECKED);
+        /* Knob */
+        lv_obj_set_style_bg_color(sw, th->text, LV_PART_KNOB);
+        if (cfg.dark_theme) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(sw, theme_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    }
 
     /* --- Sleep settings separator --- */
     lv_obj_t *sep2 = lv_obj_create(content);

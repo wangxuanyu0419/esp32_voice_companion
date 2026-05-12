@@ -29,3 +29,4 @@ void       scene_chat_add_message(chat_role_t role, const char *text);
 void       scene_chat_update_last_message(const char *text);   /* for streaming */
 void       scene_chat_clear(void);
 void       scene_chat_set_state_text(const char *text);  /* notification overlay */
+void       scene_chat_reset(void);   /* destroy screen so it rebuilds with new theme */

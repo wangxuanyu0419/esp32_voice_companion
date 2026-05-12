@@ -18,4 +18,7 @@ app_t *launcher_app_get(void);
 /** Initialise launcher (call once from main). */
 esp_err_t launcher_app_init(void);
 
+/** Destroy the current screen so it is rebuilt with the active theme next time. */
+void launcher_app_reset_screen(void);
+
 #endif /* LAUNCHER_APP_H */

@@ -21,6 +21,8 @@ typedef struct {
     /* Sleep / display power management */
     uint16_t dim_timeout_s;   /* Seconds of inactivity before dimming.  0 = never. */
     uint16_t sleep_timeout_s; /* Seconds of inactivity before screen off. 0 = never. */
+    /* Display theme */
+    bool dark_theme;          /* true = dark (default), false = light */
 } app_config_t;
 
 #define DEFAULT_DEVICE_ID       "esp32s3_001"
@@ -31,6 +33,7 @@ typedef struct {
 #define DEFAULT_BEEP_FEEDBACK   true
 #define DEFAULT_DIM_TIMEOUT_S   30    /* dim after 30 s */
 #define DEFAULT_SLEEP_TIMEOUT_S 120   /* screen off after 2 min */
+#define DEFAULT_DARK_THEME      true  /* dark by default */
 
 esp_err_t config_init(void);
 esp_err_t config_get(app_config_t *cfg);

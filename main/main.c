@@ -15,6 +15,7 @@
 #include "audio_pipeline.h"
 #include "ws_protocol.h"
 #include "sleep_manager.h"
+#include "ui_theme.h"
 #include "chat_app.h"
 #include "launcher_app.h"
 #include "settings_app.h"
@@ -270,7 +271,13 @@ void app_main(void)
     /* Layer 3: Application framework */
     application_init_all();
 
-    /* Layer 4: Apps */
+    /* Layer 4: Apps — apply saved theme before any screen is built */
+    {
+        app_config_t cfg = {0};
+        config_get(&cfg);
+        ui_theme_init();
+        ui_theme_set_dark(cfg.dark_theme);
+    }
     ESP_ERROR_CHECK(launcher_app_init());
     ESP_ERROR_CHECK(chat_app_init());
     ESP_ERROR_CHECK(settings_app_init());

@@ -16,5 +16,6 @@ esp_err_t avatar_show_message(const char *msg);
 esp_err_t avatar_clear_message(void);
 esp_err_t avatar_set_connection_status(bool connected);
 avatar_emotion_t avatar_get_current_emotion(void);
+void             avatar_reset_screen(void);   /* destroy + rebuild with new theme */
 
 #endif /* SCENE_AVATAR_H */

@@ -178,6 +178,20 @@ void scene_chat_clear(void)
     s_last_label = NULL;
 }
 
+void scene_chat_reset(void)
+{
+    if (s_screen) {
+        lv_obj_del(s_screen);
+        s_screen      = NULL;
+        s_status_bar  = NULL;
+        s_list        = NULL;
+        s_bottom_hint = NULL;
+        s_last_label  = NULL;
+        s_msg_count   = 0;
+        s_initialized = false;
+    }
+}
+
 void scene_chat_set_state_text(const char *text)
 {
     if (!s_status_bar) return;

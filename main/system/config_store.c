@@ -81,6 +81,9 @@ esp_err_t config_get(app_config_t *cfg)
         tmp = -1;
         cfg->sleep_timeout_s = (nvs_get_i32(handle, "sleep_t", &tmp) == ESP_OK)
                                ? (uint16_t)tmp : DEFAULT_SLEEP_TIMEOUT_S;
+        tmp = DEFAULT_DARK_THEME ? 1 : 0;
+        nvs_get_i32(handle, "dark_theme", &tmp);
+        cfg->dark_theme = (bool)tmp;
     }
 
     nvs_close(handle);
@@ -119,8 +122,9 @@ esp_err_t config_save(const app_config_t *cfg)
     if ((ret = nvs_set_str(handle, "cf_client_id", cfg->cf_client_id))    != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "cf_secret",    cfg->cf_client_secret)) != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "ws_token",     cfg->ws_auth_token))    != ESP_OK) goto out;
-    if ((ret = nvs_set_i32(handle, "dim_t",   (int32_t)cfg->dim_timeout_s))   != ESP_OK) goto out;
-    if ((ret = nvs_set_i32(handle, "sleep_t", (int32_t)cfg->sleep_timeout_s)) != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "dim_t",     (int32_t)cfg->dim_timeout_s))   != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "sleep_t",   (int32_t)cfg->sleep_timeout_s)) != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "dark_theme",(int32_t)(cfg->dark_theme ? 1 : 0))) != ESP_OK) goto out;
     ret = nvs_commit(handle);
 
 out:
@@ -142,6 +146,7 @@ esp_err_t config_reset(void)
     cfg.beep_feedback   = DEFAULT_BEEP_FEEDBACK;
     cfg.dim_timeout_s   = DEFAULT_DIM_TIMEOUT_S;
     cfg.sleep_timeout_s = DEFAULT_SLEEP_TIMEOUT_S;
+    cfg.dark_theme      = DEFAULT_DARK_THEME;
     return config_save(&cfg);
 }
 

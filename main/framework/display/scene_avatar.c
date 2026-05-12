@@ -162,3 +162,16 @@ esp_err_t avatar_set_connection_status(bool connected)
 avatar_emotion_t avatar_get_current_emotion(void) { return s_current_emotion; }
 
 lv_obj_t *avatar_get_screen(void) { return s_screen; }
+
+void avatar_reset_screen(void)
+{
+    if (s_screen) {
+        lv_obj_del(s_screen);
+        s_screen       = NULL;
+        s_status_bar   = NULL;
+        s_avatar_img   = NULL;
+        s_msg_label    = NULL;
+        s_status_label = NULL;
+        s_initialized  = false;
+    }
+}
