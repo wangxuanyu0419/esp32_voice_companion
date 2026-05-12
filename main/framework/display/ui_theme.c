@@ -38,37 +38,29 @@ void ui_theme_init(void)
     s_dark_theme.card             = lv_color_hex(0x161B22);
     s_dark_theme.card_empty       = lv_color_hex(0x0F1318);
 
-    /* ── Light theme — iOS-inspired, good contrast on LCD/AMOLED ─────────── */
-    /*
-     * Background stack (light to dark):
-     *   screen bg  #F2F2F7  — iOS system grouped background (soft blue-gray)
-     *   card       #FFFFFF  — white cards pop on the gray bg
-     *   card_empty #E5E5EA  — subtle placeholder tiles
-     *
-     * Text:
-     *   primary  #1C1C1E  — near-black (not harsh pure black)
-     *   dim      #6C6C70  — secondary gray (iOS label secondary)
-     *
-     * Accent: keep cyan #18DFF2 — project identity colour
-     *
-     * Chat bubbles (WeChat-style on light):
-     *   user       #07C160  — WeChat green
-     *   assistant  #FFFFFF  — white bubble, slight border
-     *   system     #E5E5EA  — neutral pill
-     */
-    s_light_theme.bg               = lv_color_hex(0xF2F2F7);
-    s_light_theme.text             = lv_color_hex(0x1C1C1E);
-    s_light_theme.text_dim         = lv_color_hex(0x6C6C70);
-    s_light_theme.chat_bg          = lv_color_hex(0xEFEFF4);
+    /* ── Light theme — Xiaozhi spec ──────────────────────────────────────────
+     *   bg / chat_bg  : #FFFFFF  (pure white, matching spec)
+     *   text          : #000000  (pure black)
+     *   cards         : #F5F5F5  (slightly off-white so tiles are visible on white bg)
+     *   card_empty    : #EBEBEB
+     *   bubbles       : user #07C160 (WeChat green), assistant #F0F0F0 (light gray)
+     *   border/sep    : #E0E0E0  (soft divider)
+     *   text_dim      : #666666
+     *   accent        : #18DFF2  (keep project cyan)
+     * ─────────────────────────────────────────────────────────────────────── */
+    s_light_theme.bg               = lv_color_hex(0xFFFFFF);
+    s_light_theme.text             = lv_color_hex(0x000000);
+    s_light_theme.text_dim         = lv_color_hex(0x666666);
+    s_light_theme.chat_bg          = lv_color_hex(0xFFFFFF);
     s_light_theme.user_bubble      = lv_color_hex(0x07C160);
-    s_light_theme.assistant_bubble = lv_color_hex(0xFFFFFF);
-    s_light_theme.system_bubble    = lv_color_hex(0xE5E5EA);
-    s_light_theme.system_text      = lv_color_hex(0x6C6C70);
-    s_light_theme.border           = lv_color_hex(0xC7C7CC);
+    s_light_theme.assistant_bubble = lv_color_hex(0xF0F0F0);
+    s_light_theme.system_bubble    = lv_color_hex(0xE8E8E8);
+    s_light_theme.system_text      = lv_color_hex(0x666666);
+    s_light_theme.border           = lv_color_hex(0xE0E0E0);
     s_light_theme.accent           = lv_color_hex(0x18DFF2);
     s_light_theme.low_battery      = lv_color_hex(0xFF3B30);
-    s_light_theme.card             = lv_color_hex(0xFFFFFF);
-    s_light_theme.card_empty       = lv_color_hex(0xE5E5EA);
+    s_light_theme.card             = lv_color_hex(0xF5F5F5);
+    s_light_theme.card_empty       = lv_color_hex(0xEBEBEB);
 
     /* Mark colours as ready; DO NOT reset s_dark */
     s_colors_init = true;
