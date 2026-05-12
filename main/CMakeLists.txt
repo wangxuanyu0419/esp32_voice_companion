@@ -25,6 +25,9 @@ set(SRCS
     "framework/audio/vad.c"
     "framework/display/scene_avatar.c"
     "framework/display/emotion_map.c"
+    "framework/display/ui_theme.c"
+    "framework/display/ui_status_bar.c"
+    "framework/display/scene_chat.c"
 
     # Layer 4 — Apps
     "apps/app_registry.c"
@@ -35,6 +38,13 @@ set(SRCS
     # Assets — pre-rendered LVGL image C arrays
     "assets/img_chat.c"
     "assets/img_settings.c"
+
+    # Assets — fonts (PuHui + FontAwesome subsets)
+    "assets/fonts/font_puhui_16_4.c"
+    "assets/fonts/font_puhui_20_4.c"
+    "assets/fonts/font_puhui_24_4.c"
+    "assets/fonts/font_awesome_20_4.c"
+    "assets/fonts/font_awesome_30_4.c"
 )
 
 # Make every header findable by basename (no path prefix needed in #include)
@@ -53,6 +63,7 @@ set(INCLUDE_DIRS
     "apps/launcher"
     "apps/settings"
     "assets"
+    "assets/fonts"
 )
 
 idf_component_register(

@@ -9,6 +9,7 @@
 #include "ws_protocol.h"
 #include "audio_pipeline.h"
 #include "scene_avatar.h"
+#include "scene_chat.h"
 #include "application.h"
 #include "app_state.h"
 #include "button.h"
@@ -36,7 +37,7 @@ static void on_server_tts(const char *text, void *arg)
     (void)arg;
     ESP_LOGI(TAG, "[WS→ESP] tts_text: %s", text);
     application_set_state(APP_STATE_SPEAKING);
-    avatar_show_message(text);
+    scene_chat_add_message(CHAT_ROLE_ASSISTANT, text);
     audio_play_tts(text);
 }
 
@@ -59,17 +60,26 @@ static void on_server_status(const ws_status_event_t *status, void *arg)
     (void)arg;
     ESP_LOGI(TAG, "[WS→ESP] status L=%d T=%d S=%d",
              status->listening, status->thinking, status->speaking);
-    if (status->speaking)       application_set_state(APP_STATE_SPEAKING);
-    else if (status->thinking)  application_set_state(APP_STATE_THINKING);
-    else if (status->listening) application_set_state(APP_STATE_LISTENING);
-    else                        application_set_state(APP_STATE_IDLE);
+    if (status->speaking) {
+        application_set_state(APP_STATE_SPEAKING);
+        scene_chat_set_state_text("播放中...");
+    } else if (status->thinking) {
+        application_set_state(APP_STATE_THINKING);
+        scene_chat_set_state_text("思考中...");
+    } else if (status->listening) {
+        application_set_state(APP_STATE_LISTENING);
+        scene_chat_set_state_text("请说话...");
+    } else {
+        application_set_state(APP_STATE_IDLE);
+        scene_chat_set_state_text(NULL);
+    }
 }
 
 static void on_server_text(const char *text, void *arg)
 {
     (void)arg;
     ESP_LOGI(TAG, "[WS→ESP] assistant_text: %s", text);
-    avatar_show_message(text);
+    scene_chat_update_last_message(text);
 }
 
 /* -------------------------------------------------------------------------
@@ -169,10 +179,11 @@ static esp_err_t chat_on_enter(app_t *self)
 {
     (void)self;
     ESP_LOGI(TAG, "Chat app enter");
-    /* Bring up the avatar screen */
-    lv_obj_t *scr = avatar_get_screen();
+    /* Initialise chat scene if not already done */
+    scene_chat_init();
+    lv_obj_t *scr = scene_chat_get_screen();
     if (scr) lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 250, 0, false);
-    avatar_set_state(APP_STATE_IDLE);
+    scene_chat_set_state_text(NULL);
     return ESP_OK;
 }
 

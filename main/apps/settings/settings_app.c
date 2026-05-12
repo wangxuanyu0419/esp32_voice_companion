@@ -23,6 +23,9 @@
 #include "ws_protocol.h"
 #include "display_driver.h"
 #include "sleep_manager.h"
+#include "ui_theme.h"
+#include "ui_fonts.h"
+#include "ui_status_bar.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -37,6 +40,7 @@ static const char *TAG = "SETTINGS";
  * UI state
  * ------------------------------------------------------------------------- */
 static lv_obj_t *s_screen        = NULL;
+static lv_obj_t *s_status_bar    = NULL;
 static lv_obj_t *s_wifi_val      = NULL;
 static lv_obj_t *s_ws_val        = NULL;
 static lv_obj_t *s_heap_val      = NULL;
@@ -62,29 +66,15 @@ static uint8_t timeout_to_idx(uint16_t secs)
 /* -------------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------------- */
-/* ── Shared palette ──────────────────────────────────────────────────────
- * Soft, low-saturation tones — no punchy colours anywhere.
- * ----------------------------------------------------------------------- */
-#define S_BG          0x0A0A10   /* screen background                       */
-#define S_ROW_BG      0x111118   /* info-row card background                */
-#define S_KEY         0x6E6E82   /* muted gray-purple for key labels        */
-#define S_VAL         0xBEBEC8   /* soft milky white for value labels       */
-#define S_HDR         0xC0C0CA   /* header / title text                     */
-#define S_ACCENT      0x7A8A9E   /* muted slate-blue for icons / headings   */
-#define S_ONLINE      0x6A9474   /* desaturated sage-green  (connected)     */
-#define S_OFFLINE     0x8A6A6A   /* desaturated dusty-rose  (disconnected)  */
-#define S_SEP         0x18182A   /* thin separator line                     */
-#define S_DD_BG       0x161620   /* dropdown button / list background       */
-#define S_DD_SEL      0x1E2A3A   /* selected-item highlight in dropdown     */
-
 static lv_obj_t *make_row(lv_obj_t *parent,
                            const char *key,
                            const char *val_init,
                            lv_obj_t  **val_out)
 {
+    const ui_theme_t *th = ui_theme_get();
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row, lv_color_hex(S_ROW_BG), 0);
+    lv_obj_set_style_bg_color(row, th->card, 0);
     lv_obj_set_style_bg_opa(row, LV_OPA_100, 0);
     lv_obj_set_style_radius(row, 10, 0);
     lv_obj_set_style_border_width(row, 0, 0);
@@ -98,14 +88,14 @@ static lv_obj_t *make_row(lv_obj_t *parent,
 
     lv_obj_t *key_lbl = lv_label_create(row);
     lv_label_set_text(key_lbl, key);
-    lv_obj_set_style_text_color(key_lbl, lv_color_hex(S_KEY), 0);
-    lv_obj_set_style_text_font(key_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(key_lbl, th->text_dim, 0);
+    lv_obj_set_style_text_font(key_lbl, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(key_lbl, LV_OPA_TRANSP, 0);
 
     lv_obj_t *val_lbl = lv_label_create(row);
     lv_label_set_text(val_lbl, val_init);
-    lv_obj_set_style_text_color(val_lbl, lv_color_hex(S_VAL), 0);
-    lv_obj_set_style_text_font(val_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(val_lbl, th->text, 0);
+    lv_obj_set_style_text_font(val_lbl, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(val_lbl, LV_OPA_TRANSP, 0);
 
     if (val_out) *val_out = val_lbl;
@@ -116,19 +106,19 @@ static void refresh_dynamic_rows(void)
 {
     if (!s_screen) return;
 
+    const ui_theme_t *th = ui_theme_get();
+
     /* WiFi */
     lv_label_set_text(s_wifi_val,
         wifi_is_connected() ? "Connected" : "Disconnected");
     lv_obj_set_style_text_color(s_wifi_val,
-        wifi_is_connected() ? lv_color_hex(S_ONLINE)
-                            : lv_color_hex(S_OFFLINE), 0);
+        wifi_is_connected() ? th->user_bubble : th->low_battery, 0);
 
     /* WebSocket */
     lv_label_set_text(s_ws_val,
         ws_client_is_connected() ? "Connected" : "Disconnected");
     lv_obj_set_style_text_color(s_ws_val,
-        ws_client_is_connected() ? lv_color_hex(S_ONLINE)
-                                 : lv_color_hex(S_OFFLINE), 0);
+        ws_client_is_connected() ? th->user_bubble : th->low_battery, 0);
 
     /* Free heap */
     char buf[32];
@@ -161,31 +151,33 @@ static void back_btn_cb(lv_event_t *e)
  * Sleep timeout dropdowns
  * ------------------------------------------------------------------------- */
 
-/* Style a dropdown to match the soft muted palette */
+/* Style a dropdown to match the theme */
 static void style_dropdown(lv_obj_t *dd)
 {
+    const ui_theme_t *th = ui_theme_get();
+
     /* Button face */
-    lv_obj_set_style_bg_color(dd,     lv_color_hex(S_DD_BG), 0);
+    lv_obj_set_style_bg_color(dd,     th->card, 0);
     lv_obj_set_style_bg_opa(dd,       LV_OPA_100, 0);
-    lv_obj_set_style_border_color(dd, lv_color_hex(0x28283A), 0);
+    lv_obj_set_style_border_color(dd, th->border, 0);
     lv_obj_set_style_border_width(dd, 1, 0);
     lv_obj_set_style_radius(dd,       8, 0);
-    lv_obj_set_style_text_color(dd,   lv_color_hex(S_VAL), 0);
-    lv_obj_set_style_text_font(dd,    &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(dd,   th->text, 0);
+    lv_obj_set_style_text_font(dd,    UI_FONT_TEXT, 0);
     lv_obj_set_style_pad_hor(dd,      12, 0);
     lv_obj_set_style_pad_ver(dd,      9,  0);
 
     /* Drop-down list */
     lv_obj_t *list = lv_dropdown_get_list(dd);
-    lv_obj_set_style_bg_color(list,    lv_color_hex(S_DD_BG), 0);
-    lv_obj_set_style_border_color(list, lv_color_hex(0x28283A), 0);
+    lv_obj_set_style_bg_color(list,    th->card, 0);
+    lv_obj_set_style_border_color(list, th->border, 0);
     lv_obj_set_style_border_width(list, 1, 0);
-    lv_obj_set_style_text_color(list,  lv_color_hex(S_VAL), 0);
-    lv_obj_set_style_text_font(list,   &lv_font_montserrat_18, 0);
-    /* Selected item — muted blue-gray highlight */
-    lv_obj_set_style_bg_color(list,   lv_color_hex(S_DD_SEL),
+    lv_obj_set_style_text_color(list,  th->text, 0);
+    lv_obj_set_style_text_font(list,   UI_FONT_TEXT, 0);
+    /* Selected item highlight */
+    lv_obj_set_style_bg_color(list,   th->accent,
                                LV_PART_SELECTED | LV_STATE_CHECKED);
-    lv_obj_set_style_bg_opa(list,     LV_OPA_100,
+    lv_obj_set_style_bg_opa(list,     LV_OPA_30,
                              LV_PART_SELECTED | LV_STATE_CHECKED);
 }
 
@@ -195,9 +187,10 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
                                    uint8_t     init_idx,
                                    lv_event_cb_t cb)
 {
+    const ui_theme_t *th2 = ui_theme_get();
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row,     lv_color_hex(S_ROW_BG), 0);
+    lv_obj_set_style_bg_color(row,     th2->card, 0);
     lv_obj_set_style_bg_opa(row,       LV_OPA_100, 0);
     lv_obj_set_style_radius(row,       10, 0);
     lv_obj_set_style_border_width(row, 0, 0);
@@ -211,8 +204,8 @@ static lv_obj_t *make_dropdown_row(lv_obj_t *parent,
 
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, label);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(S_KEY), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl, th2->text_dim, 0);
+    lv_obj_set_style_text_font(lbl, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
 
     lv_obj_t *dd = lv_dropdown_create(row);
@@ -254,21 +247,31 @@ static void sleep_dd_cb(lv_event_t *e)
  * ------------------------------------------------------------------------- */
 static void build_ui(void)
 {
+    const ui_theme_t *th = ui_theme_get();
     app_config_t cfg = {0};
     config_get(&cfg);
 
     s_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(S_BG), 0);
+    lv_obj_set_style_bg_color(s_screen, th->bg, 0);
     lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
+    lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* --- Header --- */
+    /* Shared status bar */
+    s_status_bar = ui_status_bar_create(s_screen);
+    ui_status_bar_set_wifi(s_status_bar, wifi_is_connected());
+    ui_status_bar_set_ws(s_status_bar, ws_client_is_connected());
+
+    /* --- Header (below status bar) --- */
     lv_obj_t *hdr = lv_obj_create(s_screen);
-    lv_obj_set_size(hdr, DISPLAY_H_RES, 56);
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(hdr, lv_color_hex(S_BG), 0);
+    lv_obj_set_size(hdr, DISPLAY_H_RES, 50);
+    lv_obj_set_pos(hdr, 0, 38);
+    lv_obj_set_style_bg_color(hdr, th->bg, 0);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
     lv_obj_set_style_radius(hdr, 0, 0);
     lv_obj_set_style_pad_hor(hdr, 14, 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(hdr,
                           LV_FLEX_ALIGN_START,
@@ -280,7 +283,7 @@ static void build_ui(void)
     lv_obj_set_size(back_btn, 38, 38);
     lv_obj_set_style_bg_opa(back_btn, LV_OPA_TRANSP, 0);
     lv_obj_set_style_bg_opa(back_btn, LV_OPA_20, LV_STATE_PRESSED);
-    lv_obj_set_style_bg_color(back_btn, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(back_btn, th->text, LV_STATE_PRESSED);
     lv_obj_set_style_radius(back_btn, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(back_btn, 0, 0);
     lv_obj_set_style_shadow_width(back_btn, 0, 0);
@@ -288,32 +291,32 @@ static void build_ui(void)
     lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *back_lbl = lv_label_create(back_btn);
-    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(back_lbl, lv_color_hex(S_ACCENT), 0);
-    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(back_lbl, FA_CHEVRON_LEFT);
+    lv_obj_set_style_text_color(back_lbl, th->accent, 0);
+    lv_obj_set_style_text_font(back_lbl, UI_FONT_ICON, 0);
     lv_obj_set_style_bg_opa(back_lbl, LV_OPA_TRANSP, 0);
     lv_obj_center(back_lbl);
 
     lv_obj_t *title = lv_label_create(hdr);
     lv_label_set_text(title, "  Settings");
-    lv_obj_set_style_text_color(title, lv_color_hex(S_HDR), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(title, th->text, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_TEXT_LG, 0);
     lv_obj_set_style_bg_opa(title, LV_OPA_TRANSP, 0);
 
     /* Thin separator */
     lv_obj_t *sep0 = lv_obj_create(s_screen);
     lv_obj_set_size(sep0, DISPLAY_H_RES, 1);
-    lv_obj_set_pos(sep0, 0, 56);
-    lv_obj_set_style_bg_color(sep0, lv_color_hex(S_SEP), 0);
+    lv_obj_set_pos(sep0, 0, 88);   /* 38 status + 50 header */
+    lv_obj_set_style_bg_color(sep0, th->border, 0);
     lv_obj_set_style_border_width(sep0, 0, 0);
     lv_obj_set_style_radius(sep0, 0, 0);
 
     /* --- Content area --- */
     lv_obj_t *content = lv_obj_create(s_screen);
-    lv_obj_set_size(content, DISPLAY_H_RES, DISPLAY_V_RES - 57);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 57);
-    lv_obj_set_style_bg_color(content, lv_color_hex(S_BG), 0);
-    lv_obj_set_style_bg_opa(content, LV_OPA_100, 0);
+    lv_obj_set_size(content, DISPLAY_H_RES, DISPLAY_V_RES - 89);
+    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 89);
+    lv_obj_set_style_bg_color(content, th->bg, 0);
+    lv_obj_set_style_bg_opa(content, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(content, 0, 0);
     lv_obj_set_style_pad_hor(content, 16, 0);
     lv_obj_set_style_pad_ver(content, 14, 0);
@@ -353,7 +356,7 @@ static void build_ui(void)
     /* Separator */
     lv_obj_t *sep = lv_obj_create(content);
     lv_obj_set_size(sep, DISPLAY_H_RES - 32, 1);
-    lv_obj_set_style_bg_color(sep, lv_color_hex(S_SEP), 0);
+    lv_obj_set_style_bg_color(sep, th->border, 0);
     lv_obj_set_style_border_width(sep, 0, 0);
     lv_obj_set_style_pad_all(sep, 0, 0);
 
@@ -366,15 +369,15 @@ static void build_ui(void)
     /* --- Sleep settings separator --- */
     lv_obj_t *sep2 = lv_obj_create(content);
     lv_obj_set_size(sep2, DISPLAY_H_RES - 32, 1);
-    lv_obj_set_style_bg_color(sep2, lv_color_hex(S_SEP), 0);
+    lv_obj_set_style_bg_color(sep2, th->border, 0);
     lv_obj_set_style_border_width(sep2, 0, 0);
     lv_obj_set_style_pad_all(sep2, 0, 0);
 
     /* Section label */
     lv_obj_t *sleep_hdr = lv_label_create(content);
-    lv_label_set_text(sleep_hdr, LV_SYMBOL_POWER "  Display Sleep");
-    lv_obj_set_style_text_color(sleep_hdr, lv_color_hex(S_ACCENT), 0);
-    lv_obj_set_style_text_font(sleep_hdr, &lv_font_montserrat_18, 0);
+    lv_label_set_text(sleep_hdr, "Display Sleep");
+    lv_obj_set_style_text_color(sleep_hdr, th->accent, 0);
+    lv_obj_set_style_text_font(sleep_hdr, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(sleep_hdr, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_left(sleep_hdr, 4, 0);
 
@@ -426,8 +429,12 @@ static void settings_on_event(app_t *self, const event_t *evt)
     switch (evt->type) {
         case EVT_WIFI_CONNECTED:
         case EVT_WIFI_DISCONNECTED:
+            if (s_status_bar) ui_status_bar_set_wifi(s_status_bar, wifi_is_connected());
+            refresh_dynamic_rows();
+            break;
         case EVT_WS_CONNECTED:
         case EVT_WS_DISCONNECTED:
+            if (s_status_bar) ui_status_bar_set_ws(s_status_bar, ws_client_is_connected());
             refresh_dynamic_rows();
             break;
         default:

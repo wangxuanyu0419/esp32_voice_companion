@@ -7,6 +7,11 @@
 #include "scene_avatar.h"
 #include "emotion_map.h"
 #include "display_driver.h"
+#include "ui_theme.h"
+#include "ui_fonts.h"
+#include "ui_status_bar.h"
+#include "wifi_manager.h"
+#include "ws_protocol.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "lvgl.h"
@@ -19,6 +24,7 @@ static bool             s_initialized    = false;
 static avatar_emotion_t s_current_emotion = AVATAR_IDLE;
 
 static lv_obj_t *s_screen       = NULL;
+static lv_obj_t *s_status_bar   = NULL;
 static lv_obj_t *s_avatar_img   = NULL;
 static lv_obj_t *s_msg_label    = NULL;
 static lv_obj_t *s_status_label = NULL;
@@ -44,10 +50,21 @@ esp_err_t avatar_init(void)
 
     ESP_LOGI(TAG, "Avatar UI initialising...");
 
-    /* display_driver_init() already called LVGL init + registered drivers.
-     * Just grab the active screen. */
-    s_screen = lv_obj_create(NULL);   /* own screen object for this scene */
-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x000000), 0);
+    ui_theme_init();
+    const ui_theme_t *th = ui_theme_get();
+
+    /* display_driver_init() already called LVGL init + registered drivers. */
+    s_screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_screen, th->bg, 0);
+    lv_obj_set_style_pad_all(s_screen, 0, 0);
+    lv_obj_set_style_border_width(s_screen, 0, 0);
+    lv_obj_clear_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Status bar */
+    s_status_bar = ui_status_bar_create(s_screen);
+    ui_status_bar_set_wifi(s_status_bar, wifi_is_connected());
+    ui_status_bar_set_ws(s_status_bar, ws_client_is_connected());
+
     s_avatar_img = lv_img_create(s_screen);
     lv_obj_center(s_avatar_img);
     lv_img_set_zoom(s_avatar_img, 256);
@@ -56,13 +73,15 @@ esp_err_t avatar_init(void)
     s_msg_label = lv_label_create(s_screen);
     lv_label_set_text(s_msg_label, "");
     lv_obj_align(s_msg_label, LV_ALIGN_CENTER, 0, 120);
-    lv_obj_set_style_text_color(s_msg_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_color(s_msg_label, th->text, 0);
+    lv_obj_set_style_text_font(s_msg_label, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(s_msg_label, LV_OPA_TRANSP, 0);
 
     s_status_label = lv_label_create(s_screen);
-    lv_label_set_text(s_status_label, "Init...");
+    lv_label_set_text(s_status_label, "初始化中...");
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(s_status_label, th->system_text, 0);
+    lv_obj_set_style_text_font(s_status_label, UI_FONT_TEXT, 0);
     lv_obj_set_style_bg_opa(s_status_label, LV_OPA_TRANSP, 0);
 
     esp_timer_create_args_t ta = {.callback = emotion_timer_cb,
@@ -133,8 +152,9 @@ esp_err_t avatar_clear_message(void)
 esp_err_t avatar_set_connection_status(bool connected)
 {
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    const ui_theme_t *th = ui_theme_get();
     lv_obj_set_style_text_color(s_status_label,
-                                lv_color_hex(connected ? 0x00FF00 : 0xFF0000), 0);
+                                connected ? th->user_bubble : th->low_battery, 0);
     lv_label_set_text(s_status_label, connected ? "已连接" : "未连接");
     return ESP_OK;
 }
