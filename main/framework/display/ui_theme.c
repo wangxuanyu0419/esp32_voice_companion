@@ -25,17 +25,17 @@ void ui_theme_init(void)
 
     /* ── Dark theme — AMOLED-optimised ───────────────────────────────────── */
     s_dark_theme.bg               = lv_color_hex(0x000000);
-    s_dark_theme.text             = lv_color_hex(0xFFFFFF);
-    s_dark_theme.text_dim         = lv_color_hex(0x8B95A7);
-    s_dark_theme.chat_bg          = lv_color_hex(0x1F1F1F);
+    s_dark_theme.text             = lv_color_hex(0xF2F6FF);
+    s_dark_theme.text_dim         = lv_color_hex(0x9AA6B8);
+    s_dark_theme.chat_bg          = lv_color_hex(0x05070A);
     s_dark_theme.user_bubble      = lv_color_hex(0x00BB00);
-    s_dark_theme.assistant_bubble = lv_color_hex(0x2A2A2A);
+    s_dark_theme.assistant_bubble = lv_color_hex(0x101722);
     s_dark_theme.system_bubble    = lv_color_hex(0x333333);
     s_dark_theme.system_text      = lv_color_hex(0x888888);
     s_dark_theme.border           = lv_color_hex(0x2A3040);
     s_dark_theme.accent           = lv_color_hex(0x18DFF2);
     s_dark_theme.low_battery      = lv_color_hex(0xFF3333);
-    s_dark_theme.card             = lv_color_hex(0x161B22);
+    s_dark_theme.card             = lv_color_hex(0x101722);
     s_dark_theme.card_empty       = lv_color_hex(0x0F1318);
     s_dark_theme.card_pressed     = lv_color_hex(0x1E2A3A);
 
@@ -50,18 +50,18 @@ void ui_theme_init(void)
      *   accent        : #18DFF2  (keep project cyan)
      * ─────────────────────────────────────────────────────────────────────── */
     s_light_theme.bg               = lv_color_hex(0xFFFFFF);
-    s_light_theme.text             = lv_color_hex(0x000000);
-    s_light_theme.text_dim         = lv_color_hex(0x666666);
-    s_light_theme.chat_bg          = lv_color_hex(0xFFFFFF);
+    s_light_theme.text             = lv_color_hex(0x1A1A1A);
+    s_light_theme.text_dim         = lv_color_hex(0x70675C);
+    s_light_theme.chat_bg          = lv_color_hex(0xFAFAF7);
     s_light_theme.user_bubble      = lv_color_hex(0x07C160);
-    s_light_theme.assistant_bubble = lv_color_hex(0xF0F0F0);
+    s_light_theme.assistant_bubble = lv_color_hex(0xF8F6F2);
     s_light_theme.system_bubble    = lv_color_hex(0xE8E8E8);
-    s_light_theme.system_text      = lv_color_hex(0x666666);
+    s_light_theme.system_text      = lv_color_hex(0x70675C);
     s_light_theme.border           = lv_color_hex(0xEFE2CC);
-    s_light_theme.accent           = lv_color_hex(0x18DFF2);
+    s_light_theme.accent           = lv_color_hex(0x18A0FB);
     s_light_theme.low_battery      = lv_color_hex(0xFF3B30);
     s_light_theme.card             = lv_color_hex(0xFFF7E8);
-    s_light_theme.card_empty       = lv_color_hex(0xF1E5D2);
+    s_light_theme.card_empty       = lv_color_hex(0xF8F6F2);
     s_light_theme.card_pressed     = lv_color_hex(0xF1E5D2);
 
     /* Mark colours as ready; DO NOT reset s_dark */
