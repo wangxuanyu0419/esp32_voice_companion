@@ -50,7 +50,6 @@ esp_err_t avatar_init(void)
 
     ESP_LOGI(TAG, "Avatar UI initialising...");
 
-    ui_theme_init();
     const ui_theme_t *th = ui_theme_get();
 
     /* display_driver_init() already called LVGL init + registered drivers. */

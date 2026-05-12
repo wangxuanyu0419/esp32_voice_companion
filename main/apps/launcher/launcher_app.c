@@ -210,7 +210,6 @@ void launcher_app_reset_screen(void)
 
 esp_err_t launcher_app_init(void)
 {
-    ui_theme_init();
     ESP_LOGI(TAG, "Launcher app init");
     return ESP_OK;
 }

@@ -96,7 +96,6 @@ static void build_ui(void)
 esp_err_t scene_chat_init(void)
 {
     if (s_initialized) return ESP_OK;
-    ui_theme_init();
     build_ui();
     s_initialized = true;
     ESP_LOGI(TAG, "Chat scene ready");

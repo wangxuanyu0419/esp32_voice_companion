@@ -268,16 +268,18 @@ void app_main(void)
     /* Layer 2: System services */
     system_init();
 
-    /* Layer 3: Application framework */
-    application_init_all();
-
-    /* Layer 4: Apps — apply saved theme before any screen is built */
+    /* Apply saved theme BEFORE any screen is built (avatar_init is in Layer 3) */
     {
         app_config_t cfg = {0};
         config_get(&cfg);
         ui_theme_init();
         ui_theme_set_dark(cfg.dark_theme);
     }
+
+    /* Layer 3: Application framework */
+    application_init_all();
+
+    /* Layer 4: Apps */
     ESP_ERROR_CHECK(launcher_app_init());
     ESP_ERROR_CHECK(chat_app_init());
     ESP_ERROR_CHECK(settings_app_init());
