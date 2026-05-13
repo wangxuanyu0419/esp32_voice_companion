@@ -38,6 +38,8 @@ void lv_png_init(void);
 #define IMAGE_W            DISPLAY_H_RES
 #define IMAGE_H            (DISPLAY_V_RES - STATUS_BAR_H)
 #define WAV_BUF_SAMPLES    1024
+#define MJPEG_FRAME_MAX    (128 * 1024)
+#define MJPEG_FRAME_MS     100
 
 typedef struct {
     char images[MAX_MEDIA_FILES][PATH_MAX_LEN];
@@ -65,11 +67,18 @@ static lv_obj_t      *s_img;
 static lv_obj_t      *s_title;
 static lv_obj_t      *s_subtitle;
 static lv_timer_t    *s_slide_timer;
+static lv_timer_t    *s_video_timer;
 static media_list_t   s_media;
 static TaskHandle_t   s_player_task;
 static volatile bool  s_stop_playback;
 static volatile bool  s_is_playing;
 static bool           s_image_decoders_ready;
+static FILE          *s_mjpeg_file;
+static uint8_t       *s_mjpeg_frame;
+static size_t         s_mjpeg_frame_len;
+static lv_img_dsc_t   s_mjpeg_dsc;
+static int            s_video_index;
+static bool           s_video_playing;
 
 static bool ends_with_ci(const char *name, const char *ext)
 {
@@ -114,7 +123,28 @@ static void media_scan_dir(const char *dir_path)
         if (n <= 0 || n >= (int)sizeof(full)) continue;
 
         struct stat st;
-        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (stat(full, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            char video_path[PATH_MAX_LEN];
+            int vn = snprintf(video_path, sizeof(video_path), "%s/VIDEO.MJPG", full);
+            if (vn > 0 && vn < (int)sizeof(video_path) &&
+                stat(video_path, &st) == 0 && S_ISREG(st.st_mode) &&
+                s_media.video_count < MAX_MEDIA_FILES) {
+                strlcpy(s_media.videos[s_media.video_count++], video_path, PATH_MAX_LEN);
+
+                char audio_path[PATH_MAX_LEN];
+                int an = snprintf(audio_path, sizeof(audio_path), "%s/AUDIO.WAV", full);
+                if (an > 0 && an < (int)sizeof(audio_path) &&
+                    stat(audio_path, &st) == 0 && S_ISREG(st.st_mode) &&
+                    s_media.wav_count < MAX_MEDIA_FILES) {
+                    strlcpy(s_media.wavs[s_media.wav_count++], audio_path, PATH_MAX_LEN);
+                }
+            }
+            continue;
+        }
+
+        if (!S_ISREG(st.st_mode)) continue;
 
         if ((ends_with_ci(ent->d_name, ".jpg") ||
              ends_with_ci(ent->d_name, ".jpeg") ||
@@ -123,7 +153,7 @@ static void media_scan_dir(const char *dir_path)
             strlcpy(s_media.images[s_media.image_count++], full, PATH_MAX_LEN);
         } else if (ends_with_ci(ent->d_name, ".wav") && s_media.wav_count < MAX_MEDIA_FILES) {
             strlcpy(s_media.wavs[s_media.wav_count++], full, PATH_MAX_LEN);
-        } else if (ends_with_ci(ent->d_name, ".mp4") && s_media.video_count < MAX_MEDIA_FILES) {
+        } else if (ends_with_ci(ent->d_name, ".mjpg") && s_media.video_count < MAX_MEDIA_FILES) {
             strlcpy(s_media.videos[s_media.video_count++], full, PATH_MAX_LEN);
         }
     }
@@ -138,8 +168,27 @@ static void media_scan(void)
     media_scan_dir(MEDIA_DIR);
     media_scan_dir(MEDIA_ROOT);
 
-    ESP_LOGI(TAG, "Media scan: %d images, %d wav, %d mp4",
+    ESP_LOGI(TAG, "Media scan: %d images, %d wav, %d mjpeg",
              s_media.image_count, s_media.wav_count, s_media.video_count);
+}
+
+static void companion_audio_path(const char *video_path, char *audio_path, size_t audio_path_size)
+{
+    strlcpy(audio_path, video_path, audio_path_size);
+    char *slash = strrchr(audio_path, '/');
+    if (slash) {
+        strlcpy(slash + 1, "AUDIO.WAV", audio_path_size - (size_t)(slash + 1 - audio_path));
+    }
+}
+
+static void stop_video(void)
+{
+    if (s_video_timer) lv_timer_pause(s_video_timer);
+    if (s_mjpeg_file) {
+        fclose(s_mjpeg_file);
+        s_mjpeg_file = NULL;
+    }
+    s_video_playing = false;
 }
 
 static void show_current_image(void)
@@ -148,7 +197,11 @@ static void show_current_image(void)
 
     if (s_media.image_count <= 0) {
         lv_obj_add_flag(s_img, LV_OBJ_FLAG_HIDDEN);
-        set_message("No images", "/media/*.JPG or *.PNG");
+        if (s_media.video_count > 0) {
+            set_message("No still images", "Press Play for MJPEG video");
+        } else {
+            set_message("No media", "/media/*.JPG, *.PNG or VIDxx/VIDEO.MJPG");
+        }
         return;
     }
 
@@ -190,7 +243,7 @@ static void show_current_image(void)
              info_res == LV_RES_OK ? (s_is_playing ? "Playing WAV" : "Tap image: next  Play: WAV") : "Decode failed",
              strcmp(fit, "fit") == 0 ? "  scaled to fit" : "",
              info_res == LV_RES_OK ? "" : "  check format",
-             s_media.video_count > 0 ? "  MP4 ignored" : "");
+             s_media.video_count > 0 ? "  Play: video" : "");
     set_message(title, subtitle);
 }
 
@@ -366,6 +419,139 @@ static void play_current_wav(void)
     }
 }
 
+static bool read_next_jpeg_frame(FILE *f, uint8_t *buf, size_t cap, size_t *len)
+{
+    int prev = -1;
+    int c;
+
+    while ((c = fgetc(f)) != EOF) {
+        if (prev == 0xff && c == 0xd8) {
+            buf[0] = 0xff;
+            buf[1] = 0xd8;
+            *len = 2;
+            break;
+        }
+        prev = c;
+    }
+    if (c == EOF) return false;
+
+    prev = 0xd8;
+    while ((c = fgetc(f)) != EOF) {
+        if (*len >= cap) return false;
+        buf[(*len)++] = (uint8_t)c;
+        if (prev == 0xff && c == 0xd9) return true;
+        prev = c;
+    }
+    return false;
+}
+
+static void show_mjpeg_frame(void)
+{
+    if (!s_img || !s_mjpeg_frame || s_mjpeg_frame_len == 0) return;
+
+    s_mjpeg_dsc.header.always_zero = 0;
+    s_mjpeg_dsc.header.cf = LV_IMG_CF_RAW;
+    s_mjpeg_dsc.header.w = IMAGE_W;
+    s_mjpeg_dsc.header.h = IMAGE_H;
+    s_mjpeg_dsc.data_size = s_mjpeg_frame_len;
+    s_mjpeg_dsc.data = s_mjpeg_frame;
+
+    lv_img_cache_invalidate_src(&s_mjpeg_dsc);
+    lv_img_set_src(s_img, &s_mjpeg_dsc);
+    lv_img_set_zoom(s_img, LV_IMG_ZOOM_NONE);
+    lv_img_set_antialias(s_img, true);
+    lv_obj_clear_flag(s_img, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_center(s_img);
+}
+
+static bool video_step(void)
+{
+    if (!s_mjpeg_file || !s_mjpeg_frame) return false;
+    if (read_next_jpeg_frame(s_mjpeg_file, s_mjpeg_frame, MJPEG_FRAME_MAX, &s_mjpeg_frame_len)) {
+        show_mjpeg_frame();
+        return true;
+    }
+    rewind(s_mjpeg_file);
+    if (read_next_jpeg_frame(s_mjpeg_file, s_mjpeg_frame, MJPEG_FRAME_MAX, &s_mjpeg_frame_len)) {
+        show_mjpeg_frame();
+        return true;
+    }
+    return false;
+}
+
+static void video_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!video_step()) {
+        stop_video();
+        set_message("Video decode failed", "Check VIDEO.MJPG frame size");
+    }
+}
+
+static void play_current_video(void)
+{
+    if (s_media.video_count <= 0) {
+        play_current_wav();
+        return;
+    }
+    if (s_video_playing) {
+        stop_video();
+        stop_wav();
+        show_current_image();
+        return;
+    }
+
+    stop_wav();
+    if (s_slide_timer) lv_timer_pause(s_slide_timer);
+
+    if (!s_mjpeg_frame) {
+        s_mjpeg_frame = heap_caps_malloc(MJPEG_FRAME_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_mjpeg_frame) {
+            set_message("Video buffer failed", "Need PSRAM for MJPEG frame");
+            return;
+        }
+    }
+
+    const char *path = s_media.videos[s_video_index % s_media.video_count];
+    s_mjpeg_file = fopen(path, "rb");
+    if (!s_mjpeg_file) {
+        set_message("Video open failed", base_name(path));
+        return;
+    }
+
+    s_video_playing = true;
+    char title[64];
+    snprintf(title, sizeof(title), "Video %d/%d  %s",
+             s_video_index + 1, s_media.video_count, base_name(path));
+    set_message(title, "MJPEG stream 10 fps");
+
+    char audio_path[PATH_MAX_LEN];
+    companion_audio_path(path, audio_path, sizeof(audio_path));
+    struct stat st;
+    if (stat(audio_path, &st) == 0 && S_ISREG(st.st_mode)) {
+        for (int i = 0; i < s_media.wav_count; i++) {
+            if (strcmp(s_media.wavs[i], audio_path) == 0) {
+                s_media.wav_index = i;
+                play_current_wav();
+                break;
+            }
+        }
+    }
+
+    if (!video_step()) {
+        stop_video();
+        set_message("Video decode failed", base_name(path));
+        return;
+    }
+
+    if (!s_video_timer) {
+        s_video_timer = lv_timer_create(video_timer_cb, MJPEG_FRAME_MS, NULL);
+    } else {
+        lv_timer_set_period(s_video_timer, MJPEG_FRAME_MS);
+        lv_timer_resume(s_video_timer);
+    }
+}
+
 static void img_click_cb(lv_event_t *e)
 {
     (void)e;
@@ -375,12 +561,21 @@ static void img_click_cb(lv_event_t *e)
 static void play_click_cb(lv_event_t *e)
 {
     (void)e;
-    play_current_wav();
+    play_current_video();
 }
 
 static void next_wav_click_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_media.video_count > 0) {
+        stop_video();
+        stop_wav();
+        s_video_index = (s_video_index + 1) % s_media.video_count;
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Selected %s", base_name(s_media.videos[s_video_index]));
+        if (s_subtitle) lv_label_set_text(s_subtitle, msg);
+        return;
+    }
     if (s_media.wav_count <= 0) return;
     s_media.wav_index = (s_media.wav_index + 1) % s_media.wav_count;
     char msg[64];
@@ -459,7 +654,7 @@ static void build_ui(void)
     lv_obj_align(s_subtitle, LV_ALIGN_TOP_LEFT, 10, 25);
 
     make_button(overlay, "Play", 12, play_click_cb);
-    make_button(overlay, "Next WAV", 110, next_wav_click_cb);
+    make_button(overlay, "Next Vid", 110, next_wav_click_cb);
     make_button(overlay, "Next JPG", 208, img_click_cb);
 
     s_slide_timer = lv_timer_create(slide_cb, 5000, NULL);
@@ -486,6 +681,9 @@ static esp_err_t media_on_enter(app_t *self)
         media_scan();
         show_current_image();
         if (s_slide_timer) lv_timer_resume(s_slide_timer);
+        if (s_media.image_count <= 0 && s_media.video_count > 0) {
+            play_current_video();
+        }
     }
 
     lv_scr_load_anim(s_screen, LV_SCR_LOAD_ANIM_FADE_IN, 200, 0, false);
@@ -496,6 +694,7 @@ static void media_on_exit(app_t *self)
 {
     (void)self;
     if (s_slide_timer) lv_timer_pause(s_slide_timer);
+    stop_video();
     stop_wav();
 }
 
