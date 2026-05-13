@@ -12,6 +12,7 @@
 #include "ws_protocol.h"
 #include "config_store.h"
 #include "app_state.h"
+#include "event_bus.h"
 #include "esp_crt_bundle.h"
 #include "emotion_map.h"
 #include "esp_websocket_client.h"
@@ -22,6 +23,7 @@
 #include <mbedtls/base64.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 static const char *TAG = "WS_PROTOCOL";
 
@@ -48,6 +50,12 @@ static ws_on_live2d_cb_t s_live2d_cb = NULL;
 static ws_on_status_cb_t s_status_cb = NULL;
 static ws_on_text_cb_t   s_text_cb   = NULL;
 static void             *s_cb_arg    = NULL;
+
+/* Voice-flow callbacks */
+static ws_on_voice_ready_cb_t s_voice_ready_cb = NULL;
+static ws_on_stt_final_cb_t   s_stt_final_cb   = NULL;
+static ws_on_turn_state_cb_t  s_turn_state_cb  = NULL;
+static void                  *s_voice_cb_arg   = NULL;
 
 /* =========================================================================
  * Internal helpers
@@ -80,18 +88,24 @@ static void ws_event_handler(void *handler_args, esp_event_base_t event_base,
     esp_websocket_event_data_t *data = (esp_websocket_event_data_t *)event_data;
 
     switch (event_id) {
-        case WEBSOCKET_EVENT_CONNECTED:
+        case WEBSOCKET_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "WebSocket connected");
             s_connected = true;
             esp_timer_start_periodic(s_ping_timer,
                                      (uint64_t)PING_INTERVAL_MS * 1000);
+            event_t ev = { .type = EVT_WS_CONNECTED };
+            event_bus_post(&ev);
             break;
+        }
 
-        case WEBSOCKET_EVENT_DISCONNECTED:
+        case WEBSOCKET_EVENT_DISCONNECTED: {
             ESP_LOGI(TAG, "WebSocket disconnected");
             s_connected = false;
             esp_timer_stop(s_ping_timer);
+            event_t ev2 = { .type = EVT_WS_DISCONNECTED };
+            event_bus_post(&ev2);
             break;
+        }
 
         case WEBSOCKET_EVENT_DATA:
             if (data && data->data_len > 0) {
@@ -198,6 +212,36 @@ static void parse_assistant_text(const cJSON *json)
     }
 }
 
+static void parse_stt_final(const cJSON *json)
+{
+    const cJSON *text = cJSON_GetObjectItem(json, "text");
+    if (text && text->valuestring && s_stt_final_cb) {
+        s_stt_final_cb(text->valuestring, s_voice_cb_arg);
+    }
+}
+
+static void parse_voice_turn_state(const cJSON *json)
+{
+    const cJSON *state = cJSON_GetObjectItem(json, "state");
+    if (!state || !state->valuestring) return;
+
+    const char *s = state->valuestring;
+    ESP_LOGI(TAG, "voice_turn_state: %s", s);
+
+    /* Delegate app-state changes to the chat_app callback so the chat-state
+     * machine and the display stay in sync. */
+    if (s_turn_state_cb) s_turn_state_cb(s, s_voice_cb_arg);
+}
+
+static void parse_tts_sentence(const cJSON *json)
+{
+    /* Treat like tts_text — call the TTS callback with the sentence text */
+    const cJSON *text = cJSON_GetObjectItem(json, "text");
+    if (text && text->valuestring && s_tts_cb) {
+        s_tts_cb(text->valuestring, s_cb_arg);
+    }
+}
+
 void ws_protocol_parse(const char *json_str)
 {
     cJSON *json = cJSON_Parse(json_str);
@@ -214,11 +258,19 @@ void ws_protocol_parse(const char *json_str)
 
     const char *t = type_item->valuestring;
 
-    if      (strcmp(t, "tts_text")       == 0) parse_tts_text(json);
-    else if (strcmp(t, "live2d")         == 0) parse_live2d(json);
-    else if (strcmp(t, "status")         == 0) parse_status(json);
-    else if (strcmp(t, "assistant_text") == 0) parse_assistant_text(json);
-    else if (strcmp(t, "ready")          == 0) {
+    if      (strcmp(t, "tts_text")           == 0) parse_tts_text(json);
+    else if (strcmp(t, "tts_sentence")       == 0) parse_tts_sentence(json);
+    else if (strcmp(t, "tts_sentence_end")   == 0) { /* all sentences received */ }
+    else if (strcmp(t, "live2d")             == 0) parse_live2d(json);
+    else if (strcmp(t, "status")             == 0) parse_status(json);
+    else if (strcmp(t, "assistant_text")     == 0) parse_assistant_text(json);
+    else if (strcmp(t, "stt_final")          == 0) parse_stt_final(json);
+    else if (strcmp(t, "voice_turn_state")   == 0) parse_voice_turn_state(json);
+    else if (strcmp(t, "voice_session_ready")== 0) {
+        ESP_LOGI(TAG, "Voice session ready");
+        if (s_voice_ready_cb) s_voice_ready_cb(s_voice_cb_arg);
+    }
+    else if (strcmp(t, "ready")              == 0) {
         ESP_LOGI(TAG, "Server ready");
         app_state_set_current(APP_STATE_IDLE);
     }
@@ -247,6 +299,17 @@ void ws_protocol_register_callbacks(ws_on_tts_cb_t tts_cb,
     s_status_cb = status_cb;
     s_text_cb   = text_cb;
     s_cb_arg    = arg;
+}
+
+void ws_protocol_register_voice_callbacks(ws_on_voice_ready_cb_t voice_ready_cb,
+                                          ws_on_stt_final_cb_t stt_final_cb,
+                                          ws_on_turn_state_cb_t turn_state_cb,
+                                          void *arg)
+{
+    s_voice_ready_cb = voice_ready_cb;
+    s_stt_final_cb   = stt_final_cb;
+    s_turn_state_cb  = turn_state_cb;
+    s_voice_cb_arg   = arg;
 }
 
 int ws_protocol_build_stt_audio(const int16_t *pcm_data, size_t sample_count,
@@ -411,6 +474,91 @@ void ws_register_message_callback(ws_message_cb_t cb, void *arg)
 {
     s_msg_cb     = cb;
     s_msg_cb_arg = arg;
+}
+
+/* =========================================================================
+ * Voice session + binary audio (ClawChat protocol)
+ * ========================================================================= */
+
+esp_err_t ws_client_send_voice_session_start(void)
+{
+    app_config_t cfg;
+    config_get(&cfg);
+    snprintf(s_json_buf, sizeof(s_json_buf),
+             "{\"type\":\"voice_session_start\",\"device_id\":\"%s\",\"agent\":\"%s\"}",
+             cfg.device_id, cfg.agent);
+    send_json(s_json_buf);
+    ESP_LOGI(TAG, "voice_session_start sent");
+    return ESP_OK;
+}
+
+esp_err_t ws_client_send_voice_session_stop(void)
+{
+    snprintf(s_json_buf, sizeof(s_json_buf), "{\"type\":\"voice_session_stop\"}");
+    send_json(s_json_buf);
+    return ESP_OK;
+}
+
+esp_err_t ws_client_send_voice_turn_complete(void)
+{
+    snprintf(s_json_buf, sizeof(s_json_buf), "{\"type\":\"voice_turn_complete\"}");
+    send_json(s_json_buf);
+    ESP_LOGI(TAG, "voice_turn_complete sent");
+    return ESP_OK;
+}
+
+/* 32-byte audio frame header (little-endian integers, packed) */
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  magic[4];       /* 0xCC 0x56 0x43 0x01 */
+    uint32_t chunk_idx;      /* LE */
+    uint32_t sample_rate;    /* LE, 16000 */
+    uint8_t  flags;          /* bit0 = isLast */
+    uint8_t  channels;       /* 1 */
+    uint8_t  bits_per_sample;/* 16 */
+    uint8_t  reserved;       /* 0 */
+    uint8_t  turn_id[16];    /* 16-byte opaque ID */
+} audio_frame_hdr_t;         /* 32 bytes total */
+#pragma pack(pop)
+
+esp_err_t ws_client_send_binary_chunk(const int16_t *pcm, size_t sample_count,
+                                      uint32_t chunk_idx,
+                                      const uint8_t turn_id[16],
+                                      bool is_last)
+{
+    if (!s_connected || !s_ws_client) return ESP_FAIL;
+
+    size_t pcm_bytes = sample_count * sizeof(int16_t);
+    size_t total     = sizeof(audio_frame_hdr_t) + pcm_bytes;
+
+    uint8_t *buf = malloc(total);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    audio_frame_hdr_t *hdr = (audio_frame_hdr_t *)buf;
+    hdr->magic[0]        = 0xCC;
+    hdr->magic[1]        = 0x56;
+    hdr->magic[2]        = 0x43;
+    hdr->magic[3]        = 0x01;
+    hdr->chunk_idx       = chunk_idx;    /* already LE on Xtensa */
+    hdr->sample_rate     = 16000;
+    hdr->flags           = is_last ? 1 : 0;
+    hdr->channels        = 1;
+    hdr->bits_per_sample = 16;
+    hdr->reserved        = 0;
+    memcpy(hdr->turn_id, turn_id, 16);
+
+    if (pcm_bytes > 0 && pcm) {
+        memcpy(buf + sizeof(audio_frame_hdr_t), pcm, pcm_bytes);
+    }
+
+    int ret = esp_websocket_client_send_bin(s_ws_client, (const char *)buf,
+                                            (int)total, pdMS_TO_TICKS(200));
+    free(buf);
+
+    if (is_last) {
+        ESP_LOGI(TAG, "Binary chunk #%" PRIu32 " (isLast, %u bytes PCM)", chunk_idx, (unsigned)pcm_bytes);
+    }
+    return (ret < 0) ? ESP_FAIL : ESP_OK;
 }
 
 /* =========================================================================

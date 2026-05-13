@@ -41,12 +41,14 @@ static void boot_poll_task(void *arg)
         bool current = (gpio_get_level(BOOT_BUTTON_GPIO) == 0);
 
         if (current && !last_state) {
+            /* Button just pressed — start long-press countdown */
             press_time = esp_timer_get_time() / 1000;
             ESP_LOGI(TAG, "BOOT pressed");
-            if (s_press_start_cb) {
-                s_press_start_cb(s_press_start_arg);
-            }
+            if (s_boot_timer) xTimerStart(s_boot_timer, 0);
+            if (s_press_start_cb) s_press_start_cb(s_press_start_arg);
         } else if (!current && last_state) {
+            /* Button just released — cancel timer, fire short press if quick */
+            if (s_boot_timer) xTimerStop(s_boot_timer, 0);
             int64_t duration = esp_timer_get_time() / 1000 - press_time;
             if (duration < BUTTON_LONG_THRESHOLD_MS && s_boot_cb) {
                 ESP_LOGI(TAG, "BOOT short press (%lld ms)", duration);

@@ -2,6 +2,7 @@
 #include "chat_app.h"
 #include "launcher_app.h"
 #include "settings_app.h"
+#include "color_test.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -21,6 +22,7 @@ esp_err_t app_registry_init(void)
     app_registry_register(launcher_app_get());
     app_registry_register(chat_app_get());
     app_registry_register(settings_app_get());
+    app_registry_register(color_test_app_get());
 
     ESP_LOGI(TAG, "App registry ready (%d apps)", s_count);
     return ESP_OK;

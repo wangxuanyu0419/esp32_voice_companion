@@ -23,7 +23,9 @@ set(SRCS
     "framework/protocol/ws_protocol.c"
     "framework/audio/audio_pipeline.c"
     "framework/audio/vad.c"
+    "framework/audio/tts_player.c"
     "framework/display/scene_avatar.c"
+    "framework/display/font_manager.c"
     "framework/display/emotion_map.c"
     "framework/display/ui_theme.c"
     "framework/display/ui_status_bar.c"
@@ -34,10 +36,19 @@ set(SRCS
     "apps/chat/chat_app.c"
     "apps/launcher/launcher_app.c"
     "apps/settings/settings_app.c"
+    "apps/color_test/color_test.c"
 
     # Assets — pre-rendered LVGL image C arrays
     "assets/img_chat.c"
     "assets/img_settings.c"
+    "assets/img_state_booting.c"
+    "assets/img_state_idle.c"
+    "assets/img_state_listening.c"
+    "assets/img_state_thinking.c"
+    "assets/img_state_speaking.c"
+    "assets/img_state_error.c"
+    "assets/img_state_wifiok.c"
+    "assets/img_state_wififail.c"
 
     # Assets — fonts (PuHui + FontAwesome subsets)
     "assets/fonts/font_puhui_16_4.c"
@@ -62,6 +73,7 @@ set(INCLUDE_DIRS
     "apps/chat"
     "apps/launcher"
     "apps/settings"
+    "apps/color_test"
     "assets"
     "assets/fonts"
 )
@@ -82,6 +94,8 @@ idf_component_register(
         freertos
         log
         lwip
+        esp_http_client
+        spiffs
         # Local components
         openclaw_bridge
         # Managed components (names as registered by idf_component_manager)
@@ -92,3 +106,7 @@ idf_component_register(
         espressif__esp_io_expander_tca9554
         esp_lcd
 )
+
+# Build a SPIFFS image from spiffs_data/ and flash it alongside the app.
+# The label "spiffs" matches the partition table entry.
+spiffs_create_partition_image(spiffs ../spiffs_data FLASH_IN_PROJECT)

@@ -27,7 +27,7 @@
 #define LV_COLOR_DEPTH 16
 
 /*Swap the 2 bytes of RGB565 color. Useful if the display has an 8-bit interface (e.g. SPI)*/
-#define LV_COLOR_16_SWAP 0
+#define LV_COLOR_16_SWAP 1
 
 /*Enable features to draw on transparent background.
  *It's required if opa, and transform_* style properties are used.
@@ -46,7 +46,9 @@
  *=========================*/
 
 /*1: use custom malloc/free, 0: use the built-in `lv_mem_alloc()` and `lv_mem_free()`*/
-#define LV_MEM_CUSTOM 0
+/*Set to 1 so lv_mem_alloc() → malloc() → PSRAM (ESP32-S3, SPIRAM_USE_MALLOC=y).
+  This is required for loading large binary fonts (700 KB+) via lv_font_load(). */
+#define LV_MEM_CUSTOM 1
 #if LV_MEM_CUSTOM == 0
     /*Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB)*/
     #define LV_MEM_SIZE (48U * 1024U)          /*[bytes]*/
@@ -617,11 +619,11 @@
 #endif
 
 /*API for open, read, etc*/
-#define LV_USE_FS_POSIX 0
+#define LV_USE_FS_POSIX 1
 #if LV_USE_FS_POSIX
-    #define LV_FS_POSIX_LETTER '\0'     /*Set an upper cased letter on which the drive will accessible (e.g. 'A')*/
-    #define LV_FS_POSIX_PATH ""         /*Set the working directory. File/directory paths will be appended to it.*/
-    #define LV_FS_POSIX_CACHE_SIZE 0    /*>0 to cache this number of bytes in lv_fs_read()*/
+    #define LV_FS_POSIX_LETTER 'S'      /*Drive 'S': => lv_font_load("S:/spiffs/file.bin")*/
+    #define LV_FS_POSIX_PATH ""         /*Prepended to path; empty = absolute paths*/
+    #define LV_FS_POSIX_CACHE_SIZE 4096 /*Read-ahead cache speeds up glyph lookups*/
 #endif
 
 /*API for CreateFile, ReadFile, etc*/

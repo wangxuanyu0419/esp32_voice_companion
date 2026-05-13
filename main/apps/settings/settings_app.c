@@ -169,6 +169,10 @@ static void style_dropdown(lv_obj_t *dd)
     lv_obj_set_style_text_font(dd,    UI_FONT_TEXT, 0);
     lv_obj_set_style_pad_hor(dd,      12, 0);
     lv_obj_set_style_pad_ver(dd,      9,  0);
+    /* Restore LVGL built-in font for the indicator (down-arrow symbol)
+     * so LV_SYMBOL_DOWN renders correctly even when text font is PuHui. */
+    lv_obj_set_style_text_font(dd,  &lv_font_montserrat_14, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(dd, th->text_dim,           LV_PART_INDICATOR);
 
     /* Drop-down list */
     lv_obj_t *list = lv_dropdown_get_list(dd);
@@ -378,7 +382,7 @@ static void build_ui(void)
 
     snprintf(buf, sizeof(buf), "%s",
              strlen(cfg.wifi_ssid) > 0 ? cfg.wifi_ssid : "—");
-    make_row(content, LV_SYMBOL_WIFI "  WiFi", buf, NULL);
+    make_row(content, "WiFi", buf, NULL);
 
     /* Truncate server URL for display */
     const char *srv = cfg.server_url;
@@ -390,14 +394,13 @@ static void build_ui(void)
     /* strip path */
     char *slash = strchr(host_buf, '/');
     if (slash) *slash = '\0';
-    make_row(content, LV_SYMBOL_CALL "  Server", host_buf, NULL);
+    make_row(content, "Server", host_buf, NULL);
 
-    make_row(content, LV_SYMBOL_WIFI "  WebSocket", "—", &s_ws_val);
-    /* re-use wifi symbol for WS (no dedicated symbol) */
-    make_row(content, LV_SYMBOL_SETTINGS "  Device", cfg.device_id, NULL);
+    make_row(content, "WebSocket", "—", &s_ws_val);
+    make_row(content, "Device", cfg.device_id, NULL);
 
     snprintf(buf, sizeof(buf), "%d%%", cfg.volume);
-    make_row(content, LV_SYMBOL_AUDIO "  Volume", buf, NULL);
+    make_row(content, "Volume", buf, NULL);
 
     /* Separator */
     lv_obj_t *sep = lv_obj_create(content);
@@ -407,10 +410,10 @@ static void build_ui(void)
     lv_obj_set_style_pad_all(sep, 0, 0);
 
     /* Dynamic rows */
-    make_row(content, LV_SYMBOL_WIFI "  WiFi status", "—", &s_wifi_val);
+    make_row(content, "WiFi status", "—", &s_wifi_val);
 
-    make_row(content, LV_SYMBOL_LIST "  Free heap", "—", &s_heap_val);
-    make_row(content, LV_SYMBOL_REFRESH "  Uptime", "—", &s_uptime_val);
+    make_row(content, "Free heap", "—", &s_heap_val);
+    make_row(content, "Uptime", "—", &s_uptime_val);
 
     /* --- Theme toggle --- */
     lv_obj_t *sep_theme = lv_obj_create(content);
@@ -467,11 +470,11 @@ static void build_ui(void)
     lv_obj_set_style_pad_left(sleep_hdr, 4, 0);
 
     /* Dim + sleep dropdowns */
-    s_dim_dd   = make_dropdown_row(content, LV_SYMBOL_EYE_CLOSE "  Dim after",
+    s_dim_dd   = make_dropdown_row(content, "Dim after",
                                    k_timeout_opts,
                                    timeout_to_idx(cfg.dim_timeout_s),
                                    dim_dd_cb);
-    s_sleep_dd = make_dropdown_row(content, LV_SYMBOL_POWER "  Sleep after",
+    s_sleep_dd = make_dropdown_row(content, "Sleep after",
                                    k_timeout_opts,
                                    timeout_to_idx(cfg.sleep_timeout_s),
                                    sleep_dd_cb);

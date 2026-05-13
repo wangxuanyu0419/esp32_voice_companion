@@ -16,6 +16,7 @@
  */
 
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -44,6 +45,14 @@ bool display_driver_lock(uint32_t timeout_ms);
  * @brief  Release the LVGL mutex obtained with display_driver_lock().
  */
 void display_driver_unlock(void);
+
+/**
+ * @brief  Return the I2C master bus handle created during display init.
+ *
+ * The ES8311 audio codec shares this bus (SDA=GPIO15, SCL=GPIO14).
+ * Call only after display_driver_init().
+ */
+i2c_master_bus_handle_t display_driver_get_i2c_bus(void);
 
 /**
  * @brief  Print I2C bus scan to log (useful for diagnostics from heartbeat task).

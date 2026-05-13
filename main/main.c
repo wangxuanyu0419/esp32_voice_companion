@@ -11,6 +11,7 @@
 #include "application.h"
 #include "app_state.h"
 #include "display_driver.h"
+#include "font_manager.h"
 #include "scene_avatar.h"
 #include "audio_pipeline.h"
 #include "ws_protocol.h"
@@ -19,6 +20,7 @@
 #include "chat_app.h"
 #include "launcher_app.h"
 #include "settings_app.h"
+#include "color_test.h"
 #include "app_registry.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -64,6 +66,9 @@ static void application_init_all(void)
 
     /* Display hardware + LVGL init (must come before any UI) */
     ESP_ERROR_CHECK(display_driver_init());
+
+    /* SPIFFS mount + load comprehensive CJK fonts into PSRAM */
+    font_manager_init();   /* non-fatal: falls back to flash fonts on failure */
 
     /* Avatar UI scene */
     ESP_ERROR_CHECK(avatar_init());
@@ -186,17 +191,6 @@ static void event_handler_task(void *arg)
  * ------------------------------------------------------------------------- */
 static void application_run(void)
 {
-    /* Audio recording task — Core 0, highest user priority */
-    xTaskCreatePinnedToCore(
-        chat_app_record_task,
-        "record_task",
-        4096,
-        NULL,
-        5,
-        NULL,
-        0
-    );
-
     /* LVGL rendering loop — Core 0, starts immediately (no network dependency) */
     xTaskCreatePinnedToCore(
         lvgl_task,
@@ -283,8 +277,9 @@ void app_main(void)
     ESP_ERROR_CHECK(launcher_app_init());
     ESP_ERROR_CHECK(chat_app_init());
     ESP_ERROR_CHECK(settings_app_init());
+    ESP_ERROR_CHECK(color_test_app_init());
     ESP_ERROR_CHECK(app_registry_init());
-    /* Start at the home launcher */
+    /* Start at launcher */
     ESP_ERROR_CHECK(app_registry_launch("launcher"));
 
     /* Kick off tasks */

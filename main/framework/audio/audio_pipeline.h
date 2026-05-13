@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "driver/i2s_std.h"
 
 /* Audio parameters */
 #define AUDIO_SAMPLE_RATE      16000
@@ -37,6 +38,9 @@ int       audio_get_volume(void);
 
 typedef void (*audio_capture_cb_t)(const int16_t *pcm_data, size_t len, void *arg);
 void audio_register_capture_callback(audio_capture_cb_t cb, void *arg);
+
+/** @brief Expose I2S TX channel handle for direct use by tts_player. */
+i2s_chan_handle_t audio_get_tx_handle(void);
 
 bool      audio_manager_read_chunk(int16_t *buf, size_t *count, int timeout_ms);
 esp_err_t audio_manager_send_interrupt_before_capture(void);

@@ -27,7 +27,7 @@ typedef struct {
 
 #define DEFAULT_DEVICE_ID       "esp32s3_001"
 #define DEFAULT_AGENT           "main"
-#define DEFAULT_SERVER_URL      "wss://clawchat.xuanyu.uk"
+#define DEFAULT_SERVER_URL      "wss://clawchat.xuanyu.uk/ws"
 #define DEFAULT_VOLUME          80
 #define DEFAULT_AUTO_PLAY_TTS   true
 #define DEFAULT_BEEP_FEEDBACK   true

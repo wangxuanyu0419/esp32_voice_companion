@@ -389,6 +389,11 @@ void display_driver_unlock(void)
     xSemaphoreGive(s_lvgl_mux);
 }
 
+i2c_master_bus_handle_t display_driver_get_i2c_bus(void)
+{
+    return s_i2c_bus;
+}
+
 void display_driver_i2c_scan(void)
 {
     if (s_i2c_bus) i2c_scan(s_i2c_bus);
