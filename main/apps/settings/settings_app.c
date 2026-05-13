@@ -44,7 +44,8 @@ static const char *TAG = "SETTINGS";
  * ------------------------------------------------------------------------- */
 static lv_obj_t *s_screen        = NULL;
 static lv_obj_t *s_status_bar    = NULL;
-static lv_obj_t *s_wifi_val      = NULL;
+static lv_obj_t *s_wifi_val      = NULL;   /* WiFi 连接状态标签 */
+static lv_obj_t *s_wifi_dd       = NULL;   /* WiFi 网络选择下拉菜单 */
 static lv_obj_t *s_ws_val        = NULL;
 static lv_obj_t *s_heap_val      = NULL;
 static lv_obj_t *s_uptime_val    = NULL;
@@ -256,6 +257,7 @@ static void theme_toggle_cb(lv_event_t *e)
     s_screen     = NULL;
     s_status_bar = NULL;
     s_wifi_val   = NULL;
+    s_wifi_dd    = NULL;
     s_ws_val     = NULL;
     s_heap_val   = NULL;
     s_uptime_val = NULL;
@@ -266,6 +268,15 @@ static void theme_toggle_cb(lv_event_t *e)
     lv_scr_load(s_screen);
 
     ESP_LOGI(TAG, "Theme → %s", dark ? "dark" : "light");
+}
+
+/* WiFi 网络下拉菜单回调 */
+static void wifi_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd  = lv_event_get_target(e);
+    int        idx = (int)lv_dropdown_get_selected(dd);
+    ESP_LOGI(TAG, "用户选择网络 [%d] %s", idx, g_wifi_known_nets[idx].ssid);
+    wifi_manager_switch_network(idx);
 }
 
 static void dim_dd_cb(lv_event_t *e)
@@ -377,12 +388,50 @@ static void build_ui(void)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(content, 7, 0);
 
+    /* ── WiFi 网络选择下拉菜单 ────────────────────────────────────────────── */
+    {
+        /* 构建选项字符串: "名称1\n名称2\n..." */
+        static char wifi_opts[256];
+        wifi_opts[0] = '\0';
+        for (int i = 0; i < g_wifi_known_nets_count; i++) {
+            if (i > 0) strncat(wifi_opts, "\n", sizeof(wifi_opts) - strlen(wifi_opts) - 1);
+            strncat(wifi_opts, g_wifi_known_nets[i].ssid,
+                    sizeof(wifi_opts) - strlen(wifi_opts) - 1);
+        }
+
+        int cur_idx = wifi_manager_get_current_net_idx();
+
+        lv_obj_t *row = lv_obj_create(content);
+        lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(row,     th->card, 0);
+        lv_obj_set_style_bg_opa(row,       LV_OPA_100, 0);
+        lv_obj_set_style_radius(row,       10, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_ver(row,      10, 0);
+        lv_obj_set_style_pad_hor(row,      14, 0);
+        lv_obj_clear_flag(row,             LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(row,          LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row,
+                              LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, "WiFi");
+        lv_obj_set_style_text_color(lbl, th->text_dim, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_TEXT, 0);
+        lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
+
+        s_wifi_dd = lv_dropdown_create(row);
+        lv_dropdown_set_options(s_wifi_dd, wifi_opts);
+        lv_dropdown_set_selected(s_wifi_dd, (uint16_t)cur_idx);
+        lv_obj_set_width(s_wifi_dd, 185);
+        style_dropdown(s_wifi_dd);
+        lv_obj_add_event_cb(s_wifi_dd, wifi_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    }
+
     /* Static rows */
     char buf[64];
-
-    snprintf(buf, sizeof(buf), "%s",
-             strlen(cfg.wifi_ssid) > 0 ? cfg.wifi_ssid : "—");
-    make_row(content, "WiFi", buf, NULL);
 
     /* Truncate server URL for display */
     const char *srv = cfg.server_url;
