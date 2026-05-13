@@ -5,15 +5,18 @@ The generated files are intended for the Waveshare ESP32-S3 AMOLED player:
   VIDEO.MJPG  concatenated JPEG frames, fixed 368x410 by default
   AUDIO.WAV   PCM16 mono 16 kHz, matching the current ES8311/I2S setup
 
+By default the video is center-cropped to fill the target size and the output
+directory name is shortened for ESP32 FATFS builds without long filename support.
+
 Requires ffmpeg on PATH, for example: brew install ffmpeg
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -37,10 +40,13 @@ def require_tool(name: str) -> str:
 
 
 def default_out_dir(src: Path) -> Path:
-    safe = "".join(ch if ch.isalnum() else "_" for ch in src.stem).strip("_")
-    if not safe:
-        safe = "video"
-    return src.with_name(f"{safe}_mjpeg")
+    safe = "".join(ch for ch in src.stem.upper() if ch.isalnum())
+    digits = "".join(re.findall(r"\d+", safe))
+    if digits:
+        name = f"VID{digits[-5:]}"[:8]
+    else:
+        name = safe[:8] if safe else "VIDEO"
+    return src.with_name(name)
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +58,7 @@ def parse_args() -> argparse.Namespace:
         "-o",
         "--out-dir",
         type=Path,
-        help="Output directory. Defaults to <input_stem>_mjpeg next to input.",
+        help="Output directory. Defaults to an ESP32-friendly short name next to input.",
     )
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
@@ -77,7 +83,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cover",
         action="store_true",
-        help="Fill the screen and crop edges instead of letterboxing.",
+        default=True,
+        help="Fill the screen and crop edges. This is the default.",
+    )
+    parser.add_argument(
+        "--contain",
+        dest="cover",
+        action="store_false",
+        help="Preserve the full frame and letterbox instead of cropping.",
+    )
+    parser.add_argument(
+        "--max-error-rate",
+        default="1.0",
+        help="ffmpeg decode error threshold. 1.0 keeps best-effort output for damaged MP4s.",
     )
     return parser.parse_args()
 
@@ -117,6 +135,8 @@ def main() -> int:
         [
             ffmpeg,
             "-y",
+            "-max_error_rate",
+            args.max_error_rate,
             "-i",
             str(src),
             "-vf",
@@ -137,6 +157,8 @@ def main() -> int:
             [
                 ffmpeg,
                 "-y",
+                "-max_error_rate",
+                args.max_error_rate,
                 "-i",
                 str(src),
                 "-vn",
