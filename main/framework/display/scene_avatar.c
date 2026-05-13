@@ -25,8 +25,75 @@
 #include "esp_timer.h"
 #include "lvgl.h"
 #include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
 
 static const char *TAG = "SCENE_AVATAR";
+
+/* ── UTF-8 emoji / unsupported-char stripper ──────────────────────────────── *
+ * Returns a malloc'd copy of src with characters stripped that our fonts     *
+ * cannot render (emoji, misc symbols, variation selectors).                  *
+ * Kept characters: ASCII (< 0x80), full CJK block, CJK punctuation,         *
+ *   Hiragana/Katakana, fullwidth forms.                                      *
+ * Caller must free() the returned pointer.                                   *
+ * -------------------------------------------------------------------------- */
+static char *strip_unsupported(const char *src)
+{
+    if (!src) return NULL;
+    size_t len = strlen(src);
+    char *dst = malloc(len + 1);
+    if (!dst) return strdup(src);   /* OOM fallback: return original */
+
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t       *d = (uint8_t *)dst;
+
+    while (*s) {
+        uint8_t b = *s;
+
+        if (b < 0x80) {
+            /* ASCII — always keep */
+            *d++ = *s++;
+
+        } else if ((b & 0xE0) == 0xC0) {
+            /* 2-byte sequence (U+0080–U+07FF) — keep Latin ext / diacritics */
+            if (s[1]) { *d++ = *s++; *d++ = *s++; } else { s++; }
+
+        } else if ((b & 0xF0) == 0xE0) {
+            /* 3-byte sequence (U+0800–U+FFFF) */
+            if (s[1] && s[2]) {
+                uint32_t cp = (uint32_t)(b & 0x0F) << 12
+                            | (uint32_t)(s[1] & 0x3F) << 6
+                            | (uint32_t)(s[2] & 0x3F);
+
+                /* Strip: Misc Symbols U+2600–U+26FF, Dingbats U+2700–U+27FF,
+                 *        Misc Symbols & Arrows U+2B00–U+2BFF,
+                 *        Enclosed Alphanumerics U+2460–U+24FF,
+                 *        Variation selectors U+FE00–U+FE0F,
+                 *        Enclosed CJK U+3200–U+32FF,
+                 *        Supplemental Arrows-B U+2900–U+297F */
+                if ((cp >= 0x2460 && cp <= 0x24FF) ||
+                    (cp >= 0x2600 && cp <= 0x27FF) ||
+                    (cp >= 0x2900 && cp <= 0x297F) ||
+                    (cp >= 0x2B00 && cp <= 0x2BFF) ||
+                    (cp >= 0x3200 && cp <= 0x32FF) ||
+                    (cp >= 0xFE00 && cp <= 0xFE0F)) {
+                    s += 3; /* skip */
+                } else {
+                    *d++ = *s++; *d++ = *s++; *d++ = *s++;
+                }
+            } else { s++; }
+
+        } else if ((b & 0xF8) == 0xF0) {
+            /* 4-byte sequence (U+10000+) — ALL emoji live here; skip */
+            if (s[1] && s[2] && s[3]) { s += 4; } else { s++; }
+
+        } else {
+            s++; /* invalid byte — skip */
+        }
+    }
+    *d = '\0';
+    return dst;
+}
 
 /* ── Tap callback (set by chat_app) ───────────────────────────────────────── */
 static void (*s_tap_cb)(void) = NULL;
@@ -91,11 +158,14 @@ static void apply_state_lvgl(void *arg)
 static void apply_text_lvgl(void *arg)
 {
     if (!s_initialized || !arg) return;
-    const char *text = (const char *)arg;
+    const char *raw  = (const char *)arg;
+    char       *text = strip_unsupported(raw);
+    free(arg);
+    if (!text) return;
     lv_label_set_text(s_bubble_lbl, text);
     lv_obj_set_style_opa(s_bubble_card,
         strlen(text) > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    free(arg);
+    free(text);
 }
 
 typedef struct { char *text; bool is_user; } text_arg_t;
@@ -103,11 +173,14 @@ typedef struct { char *text; bool is_user; } text_arg_t;
 static void apply_user_text_lvgl(void *arg)
 {
     if (!s_initialized || !arg) return;
-    char *text = (char *)arg;
+    char *raw  = (char *)arg;
+    char *text = strip_unsupported(raw);
+    free(raw);
+    if (!text) return;
     lv_label_set_text(s_user_lbl, text);
     lv_obj_set_style_opa(s_user_card,
         strlen(text) > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    free(arg);
+    free(text);
 }
 
 /* ── Touch handler ────────────────────────────────────────────────────────── */

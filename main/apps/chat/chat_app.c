@@ -51,9 +51,20 @@ static QueueHandle_t s_toggle_queue = NULL;
 
 /* ── VAD parameters ───────────────────────────────────────────────────────── */
 /* Each queue chunk = AUDIO_CHUNK_SAMPLES (640) @ 16 kHz = 40 ms.
- * 600 ms silence = 15 consecutive silent chunks. */
-#define VAD_ENERGY_THRESHOLD   500    /* RMS² per sample */
-#define VAD_SILENCE_CHUNKS     15     /* 15 × 40 ms = 600 ms */
+ *
+ * VAD_ENERGY_THRESHOLD: mean-square energy per sample.
+ *   16-bit mic at room noise ≈ ±200–500 → energy ≈ 40 000–250 000.
+ *   Whisper ≈ ±1000 → 1 000 000.  Tune upward if VAD fires during speech.
+ *
+ * VAD_MIN_CHUNKS: minimum chunks to record before silence detection starts.
+ *   Prevents premature end if the user has a short pause before speaking.
+ *   38 × 40 ms = 1 520 ms (≈ 1.5 s).
+ *
+ * VAD_SILENCE_CHUNKS: consecutive silent chunks required to auto-stop.
+ *   25 × 40 ms = 1 000 ms (1 s of silence after the minimum window). */
+#define VAD_ENERGY_THRESHOLD   200000UL  /* RMS² — tune via monitor logs */
+#define VAD_MIN_CHUNKS         38        /* 38 × 40 ms = 1 520 ms minimum */
+#define VAD_SILENCE_CHUNKS     25        /* 25 × 40 ms = 1 000 ms silence */
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 static void generate_turn_id(uint8_t id[16])
@@ -90,13 +101,14 @@ static void recording_task(void *arg)
     audio_start_capture();
 
     int silence_chunks = 0;
+    int total_chunks   = 0;
 
     while (s_chat_state == CHAT_LISTENING) {
         int16_t chunk[AUDIO_CHUNK_SAMPLES];
         size_t  count = 0;
 
-        /* Wait up to 60 ms for a chunk; loop back if none yet */
-        if (!audio_manager_read_chunk(chunk, &count, 60)) {
+        /* Wait up to 80 ms for a chunk; loop back if none yet */
+        if (!audio_manager_read_chunk(chunk, &count, 80)) {
             /* Check if we were told to stop (toggle fired while waiting) */
             toggle_cmd_t cmd;
             if (xQueueReceive(s_toggle_queue, &cmd, 0) == pdTRUE) {
@@ -108,22 +120,32 @@ static void recording_task(void *arg)
 
         /* Send binary chunk */
         ws_client_send_binary_chunk(chunk, count, s_chunk_idx++, s_turn_id, false);
+        total_chunks++;
 
-        /* VAD: energy-based silence detection */
+        /* Log energy for first 30 chunks (1.2 s) to help tune threshold */
         int32_t energy = rms_energy(chunk, count);
-        if (energy < VAD_ENERGY_THRESHOLD) {
-            if (++silence_chunks >= VAD_SILENCE_CHUNKS) {
-                ESP_LOGI(TAG, "VAD: 600 ms silence → auto-finalise");
-                break;
+        if (total_chunks <= 30) {
+            ESP_LOGI(TAG, "chunk #%d  energy=%" PRId32 "  (threshold=%" PRIu32 ")",
+                     total_chunks, energy, (uint32_t)VAD_ENERGY_THRESHOLD);
+        }
+
+        /* VAD: energy-based silence detection — only after minimum window */
+        if (total_chunks >= VAD_MIN_CHUNKS) {
+            if ((uint32_t)energy < VAD_ENERGY_THRESHOLD) {
+                if (++silence_chunks >= VAD_SILENCE_CHUNKS) {
+                    ESP_LOGI(TAG, "VAD: 1 s silence after %d chunks → auto-finalise",
+                             total_chunks);
+                    break;
+                }
+            } else {
+                silence_chunks = 0;
             }
-        } else {
-            silence_chunks = 0;
         }
 
         /* Check for manual toggle (tap again) */
         toggle_cmd_t cmd;
         if (xQueueReceive(s_toggle_queue, &cmd, 0) == pdTRUE) {
-            ESP_LOGI(TAG, "Manual stop by user");
+            ESP_LOGI(TAG, "Manual stop by user (total_chunks=%d)", total_chunks);
             break;
         }
     }
