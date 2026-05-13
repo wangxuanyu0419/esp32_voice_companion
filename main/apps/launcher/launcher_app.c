@@ -4,7 +4,7 @@
  * Screen layout (368 × 448):
  *   [0..37]   Shared status bar (clock + wifi + ws dot)
  *   [70..201] Row 0: ClawChat tile, Settings tile  (150×132, r=20)
- *   [210..341] Row 1: empty placeholders
+ *   [210..341] Row 1: Media tile, Colour diagnostic tile
  *   [420]     Boot hint label
  */
 
@@ -46,8 +46,8 @@ typedef struct {
 static const tile_def_t k_tiles[4] = {
     { "chat",     "ClawChat", &img_chat_icon,     false },
     { "settings", "Settings", &img_settings_icon, false },
-    { NULL,        NULL,       NULL,               true  },
-    { NULL,        NULL,       NULL,               true  },
+    { "media",    "Media",    NULL,               false },
+    { "color_test", "Colour",  NULL,               false },
 };
 
 /* ── Widget handles ───────────────────────────────────────────────────────── */
@@ -122,6 +122,13 @@ static void build_ui(void)
             lv_img_set_src(img, t->icon);
             lv_obj_align(img, LV_ALIGN_TOP_MID, 0, 8);
             lv_obj_set_style_img_opa(img, LV_OPA_70, LV_STATE_PRESSED);
+        } else {
+            lv_obj_t *glyph = lv_label_create(card);
+            lv_label_set_text(glyph, t->app_id && strcmp(t->app_id, "media") == 0 ? FA_VOLUME_UP : FA_PLUS);
+            lv_obj_set_style_text_color(glyph, th->accent, 0);
+            lv_obj_set_style_text_font(glyph, UI_FONT_ICON_LG, 0);
+            lv_obj_set_style_bg_opa(glyph, LV_OPA_TRANSP, 0);
+            lv_obj_align(glyph, LV_ALIGN_TOP_MID, 0, 24);
         }
 
         /* Name label */

@@ -113,6 +113,7 @@ static size_t input_func(JDEC * jd, uint8_t * buff, size_t ndata);
 static int is_jpg(const uint8_t * raw_data, size_t len);
 static void lv_sjpg_cleanup(SJPEG * sjpeg);
 static void lv_sjpg_free(SJPEG * sjpeg);
+static int ext_eq_ci(const char *a, const char *b);
 
 /**********************
  *  STATIC VARIABLES
@@ -210,7 +211,7 @@ end:
     }
     else if(src_type == LV_IMG_SRC_FILE) {
         const char * fn = src;
-        if(strcmp(lv_fs_get_ext(fn), "sjpg") == 0) {
+        if(ext_eq_ci(lv_fs_get_ext(fn), "sjpg")) {
 
             uint8_t buff[22];
             memset(buff, 0, sizeof(buff));
@@ -245,7 +246,7 @@ end:
 
             }
         }
-        else if(strcmp(lv_fs_get_ext(fn), "jpg") == 0) {
+        else if(ext_eq_ci(lv_fs_get_ext(fn), "jpg") || ext_eq_ci(lv_fs_get_ext(fn), "jpeg")) {
             lv_fs_file_t file;
             lv_fs_res_t res = lv_fs_open(&file, fn, LV_FS_MODE_RD);
             if(res != LV_FS_RES_OK) return 78;
@@ -501,7 +502,7 @@ end:
         const char * fn = dsc->src;
         uint8_t * data;
 
-        if(strcmp(lv_fs_get_ext(fn), "sjpg") == 0) {
+        if(ext_eq_ci(lv_fs_get_ext(fn), "sjpg")) {
 
             uint8_t buff[22];
             memset(buff, 0, sizeof(buff));
@@ -602,7 +603,7 @@ end:
                 return LV_RES_OK;
             }
         }
-        else if(strcmp(lv_fs_get_ext(fn), "jpg") == 0) {
+        else if(ext_eq_ci(lv_fs_get_ext(fn), "jpg") || ext_eq_ci(lv_fs_get_ext(fn), "jpeg")) {
 
             lv_fs_file_t lv_file;
             lv_fs_res_t res = lv_fs_open(&lv_file, fn, LV_FS_MODE_RD);
@@ -888,6 +889,19 @@ static int is_jpg(const uint8_t * raw_data, size_t len)
     const uint8_t jpg_signature[] = {0xFF, 0xD8, 0xFF,  0xE0,  0x00,  0x10, 0x4A,  0x46, 0x49, 0x46};
     if(len < sizeof(jpg_signature)) return false;
     return memcmp(jpg_signature, raw_data, sizeof(jpg_signature)) == 0;
+}
+
+static int ext_eq_ci(const char *a, const char *b)
+{
+    if(!a || !b) return false;
+    while(*a && *b) {
+        char ca = *a++;
+        char cb = *b++;
+        if(ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if(cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if(ca != cb) return false;
+    }
+    return *a == '\0' && *b == '\0';
 }
 
 static void lv_sjpg_free(SJPEG * sjpeg)

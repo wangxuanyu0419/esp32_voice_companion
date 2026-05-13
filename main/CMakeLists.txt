@@ -10,6 +10,7 @@ set(SRCS
     "board/peripherals/button.c"
     "board/peripherals/led.c"
     "board/peripherals/display_driver.c"
+    "board/peripherals/media_storage.c"
 
     # Layer 2 — System services
     "system/wifi_manager.c"
@@ -37,6 +38,7 @@ set(SRCS
     "apps/launcher/launcher_app.c"
     "apps/settings/settings_app.c"
     "apps/color_test/color_test.c"
+    "apps/media_player/media_player_app.c"
 
     # Assets — pre-rendered LVGL image C arrays
     "assets/img_chat.c"
@@ -74,6 +76,7 @@ set(INCLUDE_DIRS
     "apps/launcher"
     "apps/settings"
     "apps/color_test"
+    "apps/media_player"
     "assets"
     "assets/fonts"
 )
@@ -96,6 +99,9 @@ idf_component_register(
         lwip
         esp_http_client
         spiffs
+        fatfs
+        sdmmc
+        esp_driver_sdmmc
         # Local components
         openclaw_bridge
         # Managed components (names as registered by idf_component_manager)

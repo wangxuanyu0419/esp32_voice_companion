@@ -28,6 +28,7 @@ static lv_res_t decoder_info(struct _lv_img_decoder_t * decoder, const void * sr
 static lv_res_t decoder_open(lv_img_decoder_t * dec, lv_img_decoder_dsc_t * dsc);
 static void decoder_close(lv_img_decoder_t * dec, lv_img_decoder_dsc_t * dsc);
 static void convert_color_depth(uint8_t * img, uint32_t px_cnt);
+static bool ext_eq_ci(const char *a, const char *b);
 
 /**********************
  *  STATIC VARIABLES
@@ -70,7 +71,7 @@ static lv_res_t decoder_info(struct _lv_img_decoder_t * decoder, const void * sr
     /*If it's a PNG file...*/
     if(src_type == LV_IMG_SRC_FILE) {
         const char * fn = src;
-        if(strcmp(lv_fs_get_ext(fn), "png") == 0) {              /*Check the extension*/
+        if(ext_eq_ci(lv_fs_get_ext(fn), "png")) {              /*Check the extension*/
 
             /* Read the width and height from the file. They have a constant location:
              * [16..23]: width
@@ -153,7 +154,7 @@ static lv_res_t decoder_open(lv_img_decoder_t * decoder, lv_img_decoder_dsc_t * 
     /*If it's a PNG file...*/
     if(dsc->src_type == LV_IMG_SRC_FILE) {
         const char * fn = dsc->src;
-        if(strcmp(lv_fs_get_ext(fn), "png") == 0) {              /*Check the extension*/
+        if(ext_eq_ci(lv_fs_get_ext(fn), "png")) {              /*Check the extension*/
 
             /*Load the PNG file into buffer. It's still compressed (not decoded)*/
             unsigned char * png_data;      /*Pointer to the loaded data. Same as the original file just loaded into the RAM*/
@@ -270,6 +271,19 @@ static void convert_color_depth(uint8_t * img, uint32_t px_cnt)
         img[i * 2 + 0] = b > 128 ? 1 : 0;
     }
 #endif
+}
+
+static bool ext_eq_ci(const char *a, const char *b)
+{
+    if(!a || !b) return false;
+    while(*a && *b) {
+        char ca = *a++;
+        char cb = *b++;
+        if(ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if(cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if(ca != cb) return false;
+    }
+    return *a == '\0' && *b == '\0';
 }
 
 #endif /*LV_USE_PNG*/

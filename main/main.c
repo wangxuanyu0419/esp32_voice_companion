@@ -21,6 +21,7 @@
 #include "launcher_app.h"
 #include "settings_app.h"
 #include "color_test.h"
+#include "media_player_app.h"
 #include "app_registry.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -278,6 +279,7 @@ void app_main(void)
     ESP_ERROR_CHECK(chat_app_init());
     ESP_ERROR_CHECK(settings_app_init());
     ESP_ERROR_CHECK(color_test_app_init());
+    ESP_ERROR_CHECK(media_player_app_init());
     ESP_ERROR_CHECK(app_registry_init());
     /* Start at launcher */
     ESP_ERROR_CHECK(app_registry_launch("launcher"));
