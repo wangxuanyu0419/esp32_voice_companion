@@ -276,7 +276,23 @@ static void wifi_dd_cb(lv_event_t *e)
     lv_obj_t *dd  = lv_event_get_target(e);
     int        idx = (int)lv_dropdown_get_selected(dd);
     ESP_LOGI(TAG, "用户选择网络 [%d] %s", idx, g_wifi_known_nets[idx].ssid);
-    wifi_manager_switch_network(idx);
+
+    if (s_wifi_val) {
+        const ui_theme_t *th = ui_theme_get();
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Connecting %s", g_wifi_known_nets[idx].ssid);
+        lv_label_set_text(s_wifi_val, buf);
+        lv_obj_set_style_text_color(s_wifi_val, th->accent, 0);
+    }
+    if (s_status_bar) ui_status_bar_set_wifi(s_status_bar, false);
+
+    esp_err_t ret = wifi_manager_switch_network(idx);
+    if (ret != ESP_OK && s_wifi_val) {
+        const ui_theme_t *th = ui_theme_get();
+        lv_label_set_text(s_wifi_val, "Switch failed");
+        lv_obj_set_style_text_color(s_wifi_val, th->low_battery, 0);
+        ESP_LOGW(TAG, "切换网络失败: %s", esp_err_to_name(ret));
+    }
 }
 
 static void dim_dd_cb(lv_event_t *e)

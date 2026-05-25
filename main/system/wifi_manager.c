@@ -20,6 +20,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <stdint.h>
 
 static const char *TAG = "WIFI_MANAGER";
 
@@ -28,6 +29,7 @@ const wifi_known_net_t g_wifi_known_nets[] = {
     { "AG Jacob",            "allBLACK#000000" },
     { "AG_Jacob_Lab_2.4GHz", "allBLACK#000000" },
     { "AG_Jacob_Lab_5GHz",   "allBLACK#000000" },
+    { "ChinaNet-Uba3",       "vxuwbfrj"         },
     { "TP-Link_D7D8",        "31707619"         },
     { "TP-Link_D7D8_5G",     "31707619"         },
     { "Xuanyu's Redmi",      "19970525"         },
@@ -50,6 +52,8 @@ static bool           s_provisioning  = false;
 static wifi_event_cb_t s_event_cb     = NULL;
 static int            s_retry_count   = 0;
 static int            s_cur_net_idx   = 0;   /* 当前尝试的网络索引 */
+static bool           s_manual_switch = false;
+static TaskHandle_t   s_switch_task   = NULL;
 
 /* ── NVS 持久化 ────────────────────────────────────────────────────────────── */
 static int load_net_idx_from_nvs(void)
@@ -92,6 +96,58 @@ static void apply_and_connect(int idx)
     esp_wifi_connect();
 }
 
+static bool scan_for_network(int idx)
+{
+    if (idx < 0 || idx >= g_wifi_known_nets_count) return false;
+
+    const char *ssid = g_wifi_known_nets[idx].ssid;
+    wifi_scan_config_t scan_cfg = {
+        .ssid = (uint8_t *)ssid,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+
+    ESP_LOGI(TAG, "Scanning for [%d] %s ...", idx, ssid);
+    esp_err_t ret = esp_wifi_scan_start(&scan_cfg, true);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Scan for %s failed: %s; connecting anyway",
+                 ssid, esp_err_to_name(ret));
+        return false;
+    }
+
+    uint16_t ap_count = 0;
+    ret = esp_wifi_scan_get_ap_num(&ap_count);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Scan result read failed: %s; connecting anyway",
+                 esp_err_to_name(ret));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Scan result for %s: %s", ssid,
+             ap_count > 0 ? "visible" : "not visible");
+    return ap_count > 0;
+}
+
+static void manual_switch_task(void *arg)
+{
+    int idx = (int)(intptr_t)arg;
+
+    bool visible = scan_for_network(idx);
+    if (!visible) {
+        ESP_LOGW(TAG, "%s not found in scan results; trying direct connection",
+                 g_wifi_known_nets[idx].ssid);
+    }
+
+    s_manual_switch = true;
+    esp_wifi_disconnect();
+    apply_and_connect(idx);
+
+    s_switch_task = NULL;
+    vTaskDelete(NULL);
+}
+
 /* ── WiFi 事件处理 ────────────────────────────────────────────────────────── */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
@@ -103,6 +159,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_is_connected = false;
         if (s_event_cb) s_event_cb(false);
+
+        if (s_manual_switch) {
+            s_manual_switch = false;
+            ESP_LOGI(TAG, "Disconnected for manual network switch");
+            return;
+        }
 
         s_retry_count++;
         if (s_retry_count >= RETRIES_PER_NET) {
@@ -199,13 +261,19 @@ esp_err_t wifi_manager_switch_network(int idx)
 {
     if (idx < 0 || idx >= g_wifi_known_nets_count) return ESP_ERR_INVALID_ARG;
     ESP_LOGI(TAG, "手动切换到 [%d] %s", idx, g_wifi_known_nets[idx].ssid);
+    if (s_switch_task) return ESP_ERR_INVALID_STATE;
+
     s_cur_net_idx = idx;
     s_retry_count = 0;
     save_net_idx_to_nvs(idx);
-    /* 断开后 DISCONNECTED 事件会再次触发 apply_and_connect，但我们直接调用更快 */
-    esp_wifi_disconnect();
-    apply_and_connect(idx);
-    return ESP_OK;
+
+    BaseType_t ok = xTaskCreate(manual_switch_task,
+                                "wifi_manual_switch",
+                                4096,
+                                (void *)(intptr_t)idx,
+                                5,
+                                &s_switch_task);
+    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 int wifi_manager_get_current_net_idx(void)
