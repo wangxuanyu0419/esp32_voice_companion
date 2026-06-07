@@ -25,7 +25,8 @@ static const char *TAG = "TTS_PLAYER";
 
 #define TTS_BASE_URL    "https://clawchat.xuanyu.uk/stream?text="
 #define TTS_TEXT_MAX    512
-#define TTS_URL_MAX     (sizeof(TTS_BASE_URL) + TTS_TEXT_MAX * 3 + 1)
+#define TTS_BASE_MAX    128
+#define TTS_URL_MAX     (TTS_BASE_MAX + TTS_TEXT_MAX * 3 + 1)
 #define TTS_QUEUE_DEPTH 4
 
 /* Player state */
@@ -100,8 +101,15 @@ static void tts_player_task(void *arg)
         char encoded[TTS_TEXT_MAX * 3 + 1];
         url_encode(text_buf, encoded, sizeof(encoded));
 
+        /* TTS base URL is derived from the configured server host so the
+         * dropdown in Settings switches TTS too. Falls back to compile-time. */
+        char base[TTS_BASE_MAX];
+        if (config_get_tts_base_url(base, sizeof(base)) < 0) {
+            strlcpy(base, TTS_BASE_URL, sizeof(base));
+        }
+
         char url[TTS_URL_MAX];
-        snprintf(url, sizeof(url), "%s%s", TTS_BASE_URL, encoded);
+        snprintf(url, sizeof(url), "%s%s", base, encoded);
         ESP_LOGI(TAG, "TTS fetch: %.80s...", url);
 
         s_playing      = true;

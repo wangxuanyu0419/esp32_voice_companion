@@ -46,6 +46,7 @@ static lv_obj_t *s_screen        = NULL;
 static lv_obj_t *s_status_bar    = NULL;
 static lv_obj_t *s_wifi_val      = NULL;   /* WiFi 连接状态标签 */
 static lv_obj_t *s_wifi_dd       = NULL;   /* WiFi 网络选择下拉菜单 */
+static lv_obj_t *s_server_dd     = NULL;   /* 服务器主机选择下拉菜单 */
 static lv_obj_t *s_ws_val        = NULL;
 static lv_obj_t *s_heap_val      = NULL;
 static lv_obj_t *s_uptime_val    = NULL;
@@ -258,6 +259,7 @@ static void theme_toggle_cb(lv_event_t *e)
     s_status_bar = NULL;
     s_wifi_val   = NULL;
     s_wifi_dd    = NULL;
+    s_server_dd  = NULL;
     s_ws_val     = NULL;
     s_heap_val   = NULL;
     s_uptime_val = NULL;
@@ -293,6 +295,22 @@ static void wifi_dd_cb(lv_event_t *e)
         lv_obj_set_style_text_color(s_wifi_val, th->low_battery, 0);
         ESP_LOGW(TAG, "切换网络失败: %s", esp_err_to_name(ret));
     }
+}
+
+/* 服务器主机下拉菜单回调 */
+static void server_dd_cb(lv_event_t *e)
+{
+    lv_obj_t *dd  = lv_event_get_target(e);
+    int        idx = (int)lv_dropdown_get_selected(dd);
+    ESP_LOGI(TAG, "用户选择服务器 [%d] %s", idx, g_server_hosts[idx].label);
+
+    config_set_server_host(idx);
+
+    /* 用新地址重连 WebSocket */
+    app_config_t cfg = {0};
+    config_get(&cfg);
+    ws_client_disconnect();
+    ws_client_connect(cfg.server_url);
 }
 
 static void dim_dd_cb(lv_event_t *e)
@@ -446,20 +464,49 @@ static void build_ui(void)
         lv_obj_add_event_cb(s_wifi_dd, wifi_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
     }
 
+    /* ── 服务器主机选择下拉菜单 ───────────────────────────────────────────── */
+    {
+        static char srv_opts[128];
+        srv_opts[0] = '\0';
+        for (int i = 0; i < g_server_hosts_count; i++) {
+            if (i > 0) strncat(srv_opts, "\n", sizeof(srv_opts) - strlen(srv_opts) - 1);
+            strncat(srv_opts, g_server_hosts[i].label,
+                    sizeof(srv_opts) - strlen(srv_opts) - 1);
+        }
+
+        int srv_idx = config_get_server_host_idx();
+
+        lv_obj_t *row = lv_obj_create(content);
+        lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(row,     th->card, 0);
+        lv_obj_set_style_bg_opa(row,       LV_OPA_100, 0);
+        lv_obj_set_style_radius(row,       10, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_pad_ver(row,      10, 0);
+        lv_obj_set_style_pad_hor(row,      14, 0);
+        lv_obj_clear_flag(row,             LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(row,          LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row,
+                              LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, "Server");
+        lv_obj_set_style_text_color(lbl, th->text_dim, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_TEXT, 0);
+        lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
+
+        s_server_dd = lv_dropdown_create(row);
+        lv_dropdown_set_options(s_server_dd, srv_opts);
+        lv_dropdown_set_selected(s_server_dd, (uint16_t)srv_idx);
+        lv_obj_set_width(s_server_dd, 215);
+        style_dropdown(s_server_dd);
+        lv_obj_add_event_cb(s_server_dd, server_dd_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    }
+
     /* Static rows */
     char buf[64];
-
-    /* Truncate server URL for display */
-    const char *srv = cfg.server_url;
-    const char *host = strstr(srv, "://");
-    if (host) host += 3; else host = srv;
-    char host_buf[40];
-    strncpy(host_buf, host, sizeof(host_buf) - 1);
-    host_buf[sizeof(host_buf)-1] = '\0';
-    /* strip path */
-    char *slash = strchr(host_buf, '/');
-    if (slash) *slash = '\0';
-    make_row(content, "Server", host_buf, NULL);
 
     make_row(content, "WebSocket", "—", &s_ws_val);
     make_row(content, "Device", cfg.device_id, NULL);

@@ -5,9 +5,68 @@
 #include "esp_mac.h"
 #include "esp_random.h"
 #include <string.h>
+#include <stdio.h>
+#include <inttypes.h>
 
 static const char *TAG           = "CONFIG_STORE";
 static const char *NVS_NAMESPACE = "esp32_voice";
+
+/* ── 可选服务器主机列表（第一个为默认/优先） ────────────────────────────── */
+const server_host_t g_server_hosts[] = {
+    { "clawchat.xuanyu.uk",     "clawchat.xuanyu.uk"     },
+    { "clawchat_mac.xuanyu.uk", "clawchat_mac.xuanyu.uk" },
+};
+const int g_server_hosts_count =
+    (int)(sizeof(g_server_hosts) / sizeof(g_server_hosts[0]));
+
+/* 从 "wss://host/ws" 或 "https://host/..." 中提取主机名到 out。 */
+static void extract_host(const char *url, char *out, size_t out_len)
+{
+    out[0] = '\0';
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t i = 0;
+    while (p[i] && p[i] != '/' && p[i] != ':' && i < out_len - 1) {
+        out[i] = p[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
+int config_get_tts_base_url(char *out, size_t len)
+{
+    app_config_t cfg = {0};
+    if (config_get(&cfg) != ESP_OK) return -1;
+    char host[96];
+    extract_host(cfg.server_url, host, sizeof(host));
+    if (host[0] == '\0') return -1;
+    int n = snprintf(out, len, "https://%s/stream?text=", host);
+    return (n > 0 && (size_t)n < len) ? n : -1;
+}
+
+int config_get_server_host_idx(void)
+{
+    app_config_t cfg = {0};
+    if (config_get(&cfg) != ESP_OK) return 0;
+    char host[96];
+    extract_host(cfg.server_url, host, sizeof(host));
+    for (int i = 0; i < g_server_hosts_count; i++) {
+        if (strcmp(host, g_server_hosts[i].host) == 0) return i;
+    }
+    return 0;
+}
+
+esp_err_t config_set_server_host(int idx)
+{
+    if (idx < 0 || idx >= g_server_hosts_count) return ESP_ERR_INVALID_ARG;
+    app_config_t cfg = {0};
+    esp_err_t ret = config_get(&cfg);
+    if (ret != ESP_OK) return ret;
+    snprintf(cfg.server_url, sizeof(cfg.server_url),
+             "wss://%s/ws", g_server_hosts[idx].host);
+    ESP_LOGI(TAG, "Server host → %s (%s)", g_server_hosts[idx].label, cfg.server_url);
+    return config_save(&cfg);
+}
 
 esp_err_t config_init(void)
 {
