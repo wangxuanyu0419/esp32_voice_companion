@@ -33,6 +33,13 @@ typedef enum {
 esp_err_t audio_play_beep(audio_beep_type_t type);
 esp_err_t audio_stop_playback(void);
 bool      audio_is_playing(void);
+
+/* Write mono PCM16 @ 16 kHz to the I2S TX (duplicated to stereo).  Blocks until
+ * the DMA accepts the data, pacing playback to real time. */
+esp_err_t audio_write_pcm(const int16_t *mono, size_t samples, int timeout_ms);
+
+/* Play a sine test tone — proves the speaker path works. */
+esp_err_t audio_play_test_tone(int freq_hz, int duration_ms);
 esp_err_t audio_set_volume(int volume);
 int       audio_get_volume(void);
 

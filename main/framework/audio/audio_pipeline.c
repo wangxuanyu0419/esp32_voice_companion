@@ -26,6 +26,7 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include <string.h>
+#include <math.h>
 
 static const char *TAG = "AUDIO";
 
@@ -349,6 +350,11 @@ esp_err_t audio_init(void)
 
     s_initialized = true;
     ESP_LOGI(TAG, "Audio pipeline ready");
+
+    /* M1 speaker bring-up: short tone proves I2S TX → ES8311 DAC → PA path.
+     * Remove once TTS playback is confirmed working. */
+    audio_play_test_tone(1000, 300);
+
     return ESP_OK;
 }
 
@@ -416,6 +422,70 @@ esp_err_t audio_play_beep(audio_beep_type_t type)
 
 esp_err_t audio_stop_playback(void)  { s_playing = false; return ESP_OK; }
 bool      audio_is_playing(void)     { return s_playing; }
+
+/* ── PCM playback ─────────────────────────────────────────────────────────── *
+ * The I2S bus runs in STEREO 16-bit mode (ES8311 standard I2S).  Mono PCM is
+ * duplicated to both L/R slots.  Writes block until the DMA has accepted the
+ * data, which paces playback to real time.                                    */
+#define PLAY_BLOCK_SAMPLES  256   /* mono samples per write block */
+static int16_t s_play_stereo[PLAY_BLOCK_SAMPLES * 2];
+
+esp_err_t audio_write_pcm(const int16_t *mono, size_t samples, int timeout_ms)
+{
+    if (!s_initialized || !s_tx_handle || !mono) return ESP_ERR_INVALID_STATE;
+
+    size_t done = 0;
+    while (done < samples) {
+        size_t n = samples - done;
+        if (n > PLAY_BLOCK_SAMPLES) n = PLAY_BLOCK_SAMPLES;
+
+        for (size_t i = 0; i < n; i++) {
+            s_play_stereo[i * 2]     = mono[done + i];  /* L */
+            s_play_stereo[i * 2 + 1] = mono[done + i];  /* R */
+        }
+
+        size_t written = 0;
+        esp_err_t ret = i2s_channel_write(s_tx_handle, s_play_stereo,
+                                          n * 2 * sizeof(int16_t),
+                                          &written, pdMS_TO_TICKS(timeout_ms));
+        if (ret != ESP_OK) return ret;
+        done += n;
+    }
+    return ESP_OK;
+}
+
+/* ── Test tone — proves the I2S TX → ES8311 DAC → PA path produces sound ──── */
+esp_err_t audio_play_test_tone(int freq_hz, int duration_ms)
+{
+    if (!s_initialized || !s_tx_handle) return ESP_ERR_INVALID_STATE;
+
+    const int    rate   = AUDIO_SAMPLE_RATE;
+    const size_t total  = (size_t)rate * duration_ms / 1000;
+    const float  step   = 2.0f * 3.14159265f * (float)freq_hz / (float)rate;
+    const int16_t amp   = 8000;   /* ~25% full scale, comfortable level */
+
+    ESP_LOGI(TAG, "Playing test tone: %d Hz, %d ms", freq_hz, duration_ms);
+    s_playing = true;
+
+    int16_t block[PLAY_BLOCK_SAMPLES];
+    float   phase = 0.0f;
+    size_t  done  = 0;
+    while (done < total && s_playing) {
+        size_t n = total - done;
+        if (n > PLAY_BLOCK_SAMPLES) n = PLAY_BLOCK_SAMPLES;
+        for (size_t i = 0; i < n; i++) {
+            block[i] = (int16_t)(amp * sinf(phase));
+            phase += step;
+            if (phase > 2.0f * 3.14159265f) phase -= 2.0f * 3.14159265f;
+        }
+        audio_write_pcm(block, n, 200);
+        done += n;
+    }
+
+    s_playing = false;
+    ESP_LOGI(TAG, "Test tone done");
+    return ESP_OK;
+}
 
 esp_err_t audio_set_volume(int volume)
 {

@@ -521,18 +521,23 @@ typedef struct {
 } audio_frame_hdr_t;         /* 32 bytes total */
 #pragma pack(pop)
 
+/* Static send buffer: 32-byte header + one 40 ms chunk (640 samples × 2 B).
+ * Avoids a malloc/free per ~40 ms frame (25×/s) during recording. */
+#define WS_TX_PCM_MAX   1024   /* max samples per chunk (covers 640) */
+static uint8_t s_bin_tx_buf[sizeof(audio_frame_hdr_t) + WS_TX_PCM_MAX * sizeof(int16_t)];
+
 esp_err_t ws_client_send_binary_chunk(const int16_t *pcm, size_t sample_count,
                                       uint32_t chunk_idx,
                                       const uint8_t turn_id[16],
                                       bool is_last)
 {
     if (!s_connected || !s_ws_client) return ESP_FAIL;
+    if (sample_count > WS_TX_PCM_MAX)  return ESP_ERR_INVALID_SIZE;
 
     size_t pcm_bytes = sample_count * sizeof(int16_t);
     size_t total     = sizeof(audio_frame_hdr_t) + pcm_bytes;
 
-    uint8_t *buf = malloc(total);
-    if (!buf) return ESP_ERR_NO_MEM;
+    uint8_t *buf = s_bin_tx_buf;
 
     audio_frame_hdr_t *hdr = (audio_frame_hdr_t *)buf;
     hdr->magic[0]        = 0xCC;
@@ -553,7 +558,6 @@ esp_err_t ws_client_send_binary_chunk(const int16_t *pcm, size_t sample_count,
 
     int ret = esp_websocket_client_send_bin(s_ws_client, (const char *)buf,
                                             (int)total, pdMS_TO_TICKS(200));
-    free(buf);
 
     if (is_last) {
         ESP_LOGI(TAG, "Binary chunk #%" PRIu32 " (isLast, %u bytes PCM)", chunk_idx, (unsigned)pcm_bytes);
