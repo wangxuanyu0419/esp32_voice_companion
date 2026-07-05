@@ -1,5 +1,6 @@
 # ESP-IDF build artifacts
 build/
+build-*/
 sdkconfig
 
 # Managed components (re-downloaded by idf_component_manager)

@@ -4,7 +4,7 @@
  * Screen layout (368 × 448):
  *   [0..37]   Shared status bar (clock + wifi + ws dot)
  *   [70..201] Row 0: ClawChat tile, Settings tile  (150×132, r=20)
- *   [210..341] Row 1: Media tile, Colour diagnostic tile
+ *   [210..341] Row 1: Media tile
  *   [420]     Boot hint label
  */
 
@@ -43,11 +43,10 @@ typedef struct {
     bool                placeholder;
 } tile_def_t;
 
-static const tile_def_t k_tiles[4] = {
+static const tile_def_t k_tiles[3] = {
     { "chat",     "ClawChat", &img_chat_icon,     false },
     { "settings", "Settings", &img_settings_icon, false },
     { "media",    "Media",    NULL,               false },
-    { "color_test", "Colour",  NULL,               false },
 };
 
 /* ── Widget handles ───────────────────────────────────────────────────────── */
@@ -82,7 +81,7 @@ static void build_ui(void)
     static const int col_x[2] = { COL0_X, COL1_X };
     static const int row_y[2] = { ROW0_Y, ROW1_Y };
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < (int)(sizeof(k_tiles) / sizeof(k_tiles[0])); i++) {
         const tile_def_t *t = &k_tiles[i];
         int cx = col_x[i & 1];
         int ry = row_y[i >> 1];

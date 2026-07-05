@@ -37,7 +37,6 @@ set(SRCS
     "apps/chat/chat_app.c"
     "apps/launcher/launcher_app.c"
     "apps/settings/settings_app.c"
-    "apps/color_test/color_test.c"
     "apps/media_player/media_player_app.c"
 
     # Assets — pre-rendered LVGL image C arrays
@@ -75,7 +74,6 @@ set(INCLUDE_DIRS
     "apps/chat"
     "apps/launcher"
     "apps/settings"
-    "apps/color_test"
     "apps/media_player"
     "assets"
     "assets/fonts"
