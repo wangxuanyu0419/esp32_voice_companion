@@ -19,6 +19,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "cJSON.h"
 #include <mbedtls/base64.h>
 #include <string.h>
@@ -33,6 +34,7 @@ static const char *TAG = "WS_PROTOCOL";
 
 static esp_websocket_client_handle_t s_ws_client = NULL;
 static bool                          s_connected  = false;
+static bool                          s_ready      = false;
 static esp_timer_handle_t            s_ping_timer = NULL;
 static const int                     PING_INTERVAL_MS = 30000;
 
@@ -57,6 +59,19 @@ static ws_on_stt_final_cb_t   s_stt_final_cb   = NULL;
 static ws_on_turn_state_cb_t  s_turn_state_cb  = NULL;
 static void                  *s_voice_cb_arg   = NULL;
 
+/* Extended protocol events. Keep these separate from the legacy voice
+ * callbacks so the stable B UI/audio path remains untouched. */
+static ws_extended_callbacks_t s_ext_cb = {0};
+static void                   *s_ext_cb_arg = NULL;
+
+/* esp_websocket_client may split one text message across several data events.
+ * Keep a bounded accumulator so the protocol parser never receives partial
+ * JSON. Binary frames are forwarded directly to the PCM queue. */
+#define WS_MAX_JSON_PAYLOAD (64 * 1024)
+static uint8_t *s_rx_text_buf = NULL;
+static size_t   s_rx_text_cap = 0;
+static uint8_t  s_rx_opcode   = 0;
+
 /* =========================================================================
  * Internal helpers
  * ========================================================================= */
@@ -78,6 +93,51 @@ static int base64_encode_buf(const uint8_t *src, size_t src_len,
     return (ret == 0) ? (int)olen : -1;
 }
 
+static void reset_text_accumulator(void)
+{
+    free(s_rx_text_buf);
+    s_rx_text_buf = NULL;
+    s_rx_text_cap = 0;
+    s_rx_opcode = 0;
+}
+
+static void handle_text_data(const esp_websocket_event_data_t *data)
+{
+    if (!data || !data->data_ptr || data->data_len <= 0) return;
+
+    size_t total = data->payload_len > 0 ? (size_t)data->payload_len
+                                         : (size_t)data->data_len;
+    size_t offset = data->payload_offset > 0 ? (size_t)data->payload_offset : 0;
+    if (total == 0 || total > WS_MAX_JSON_PAYLOAD ||
+        offset > total || (size_t)data->data_len > total - offset) {
+        ESP_LOGW(TAG, "Dropping invalid WS text payload total=%u offset=%u len=%d",
+                 (unsigned)total, (unsigned)offset, data->data_len);
+        reset_text_accumulator();
+        return;
+    }
+
+    if (offset == 0) {
+        reset_text_accumulator();
+        s_rx_text_buf = heap_caps_malloc(total + 1,
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_rx_text_buf) s_rx_text_buf = malloc(total + 1);
+        if (!s_rx_text_buf) {
+            ESP_LOGE(TAG, "No memory for %u-byte WS JSON", (unsigned)total);
+            return;
+        }
+        s_rx_text_cap = total;
+    }
+    if (!s_rx_text_buf || s_rx_text_cap != total) return;
+
+    memcpy(s_rx_text_buf + offset, data->data_ptr, (size_t)data->data_len);
+    if (offset + (size_t)data->data_len >= total && data->fin) {
+        s_rx_text_buf[total] = '\0';
+        if (s_msg_cb) s_msg_cb("json", (const char *)s_rx_text_buf, s_msg_cb_arg);
+        ws_protocol_parse((const char *)s_rx_text_buf);
+        reset_text_accumulator();
+    }
+}
+
 /* =========================================================================
  * WebSocket event handler
  * ========================================================================= */
@@ -91,6 +151,7 @@ static void ws_event_handler(void *handler_args, esp_event_base_t event_base,
         case WEBSOCKET_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "WebSocket connected");
             s_connected = true;
+            s_ready = false;
             esp_timer_start_periodic(s_ping_timer,
                                      (uint64_t)PING_INTERVAL_MS * 1000);
             event_t ev = { .type = EVT_WS_CONNECTED };
@@ -101,6 +162,8 @@ static void ws_event_handler(void *handler_args, esp_event_base_t event_base,
         case WEBSOCKET_EVENT_DISCONNECTED: {
             ESP_LOGI(TAG, "WebSocket disconnected");
             s_connected = false;
+            s_ready = false;
+            reset_text_accumulator();
             esp_timer_stop(s_ping_timer);
             event_t ev2 = { .type = EVT_WS_DISCONNECTED };
             event_bus_post(&ev2);
@@ -109,17 +172,20 @@ static void ws_event_handler(void *handler_args, esp_event_base_t event_base,
 
         case WEBSOCKET_EVENT_DATA:
             if (data && data->data_len > 0) {
-                if (s_msg_cb) {
-                    s_msg_cb("json", data->data_ptr, s_msg_cb_arg);
+                if (data->payload_offset == 0 && data->op_code != 0) {
+                    s_rx_opcode = data->op_code;
                 }
-                /* Also parse inline so registered protocol callbacks fire. */
-                /* data_ptr may not be NUL-terminated; copy to stack buffer. */
-                char *buf = malloc(data->data_len + 1);
-                if (buf) {
-                    memcpy(buf, data->data_ptr, data->data_len);
-                    buf[data->data_len] = '\0';
-                    ws_protocol_parse(buf);
-                    free(buf);
+                uint8_t opcode = data->op_code == 0 ? s_rx_opcode : data->op_code;
+                if (opcode == 0x02) {
+                    /* data_ptr is valid only during this callback. The PCM
+                     * callback copies/enqueues synchronously. */
+                    if (s_ext_cb.on_tts_audio_chunk) {
+                        s_ext_cb.on_tts_audio_chunk((const uint8_t *)data->data_ptr,
+                                                    (size_t)data->data_len,
+                                                    s_ext_cb_arg);
+                    }
+                } else if (opcode == 0x01) {
+                    handle_text_data(data);
                 }
             }
             break;
@@ -242,6 +308,69 @@ static void parse_tts_sentence(const cJSON *json)
     }
 }
 
+static const char *json_string(const cJSON *json, const char *key)
+{
+    const cJSON *item = cJSON_GetObjectItem(json, key);
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : "";
+}
+
+static void parse_broadcast(const cJSON *json)
+{
+    const char *text = json_string(json, "content");
+    if (s_ext_cb.on_broadcast && *text) {
+        ESP_LOGI(TAG, "Broadcast received (%u chars)", (unsigned)strlen(text));
+        s_ext_cb.on_broadcast(text, s_ext_cb_arg);
+    }
+    const char *url = json_string(json, "image_url");
+    if (!*url) url = json_string(json, "url");
+    if (s_ext_cb.on_image && *url) s_ext_cb.on_image(url, text, s_ext_cb_arg);
+}
+
+static void parse_agent_ack(const cJSON *json)
+{
+    const char *text = json_string(json, "text");
+    if (s_ext_cb.on_agent_ack && *text) {
+        s_ext_cb.on_agent_ack(text, s_ext_cb_arg);
+    }
+}
+
+static void parse_audio_broadcast(const cJSON *json)
+{
+    const char *stream_id = json_string(json, "stream_id");
+    const char *message = json_string(json, "message");
+    if (s_ext_cb.on_audio_broadcast && *stream_id) {
+        ESP_LOGI(TAG, "Audio broadcast received: stream_id=%s", stream_id);
+        s_ext_cb.on_audio_broadcast(stream_id, message, s_ext_cb_arg);
+    }
+}
+
+static void parse_tts_audio_start(const cJSON *json)
+{
+    if (!s_ext_cb.on_tts_audio_start) return;
+    const cJSON *rate = cJSON_GetObjectItem(json, "sampleRate");
+    const cJSON *channels = cJSON_GetObjectItem(json, "channels");
+    s_ext_cb.on_tts_audio_start(json_string(json, "streamId"),
+                                cJSON_IsNumber(rate) ? rate->valueint : 24000,
+                                cJSON_IsNumber(channels) ? channels->valueint : 1,
+                                json_string(json, "encoding"), s_ext_cb_arg);
+}
+
+static void parse_tts_audio_end(const cJSON *json)
+{
+    if (s_ext_cb.on_tts_audio_end) {
+        s_ext_cb.on_tts_audio_end(json_string(json, "streamId"), s_ext_cb_arg);
+    }
+}
+
+static void parse_image(const cJSON *json)
+{
+    const char *url = json_string(json, "url");
+    if (!*url) url = json_string(json, "image_url");
+    const char *caption = json_string(json, "caption");
+    if (!*caption) caption = json_string(json, "text");
+    if (s_ext_cb.on_image && *url) s_ext_cb.on_image(url, caption, s_ext_cb_arg);
+}
+
 void ws_protocol_parse(const char *json_str)
 {
     cJSON *json = cJSON_Parse(json_str);
@@ -266,20 +395,35 @@ void ws_protocol_parse(const char *json_str)
     else if (strcmp(t, "assistant_text")     == 0) parse_assistant_text(json);
     else if (strcmp(t, "stt_final")          == 0) parse_stt_final(json);
     else if (strcmp(t, "voice_turn_state")   == 0) parse_voice_turn_state(json);
+    else if (strcmp(t, "broadcast")          == 0) parse_broadcast(json);
+    else if (strcmp(t, "agent_ack")          == 0) parse_agent_ack(json);
+    else if (strcmp(t, "audio_broadcast")    == 0) parse_audio_broadcast(json);
+    else if (strcmp(t, "tts_audio_start")    == 0) parse_tts_audio_start(json);
+    else if (strcmp(t, "tts_audio_end")      == 0) parse_tts_audio_end(json);
+    else if (strcmp(t, "image")              == 0 ||
+             strcmp(t, "image_message")      == 0) parse_image(json);
     else if (strcmp(t, "voice_session_ready")== 0) {
         ESP_LOGI(TAG, "Voice session ready");
         if (s_voice_ready_cb) s_voice_ready_cb(s_voice_cb_arg);
     }
     else if (strcmp(t, "ready")              == 0) {
         ESP_LOGI(TAG, "Server ready");
+        s_ready = true;
         app_state_set_current(APP_STATE_IDLE);
     }
     else if (strcmp(t, "error") == 0) {
         const cJSON *msg = cJSON_GetObjectItem(json, "message");
         ESP_LOGE(TAG, "Server error: %s", msg ? msg->valuestring : "?");
+        if (s_ext_cb.on_error) {
+            s_ext_cb.on_error(msg && msg->valuestring ? msg->valuestring : "Server error",
+                              s_ext_cb_arg);
+        }
         app_state_set_current(APP_STATE_ERROR);
     }
-    else if (strcmp(t, "pong") == 0) { /* ignore */ }
+    else if (strcmp(t, "pong") == 0) { /* heartbeat acknowledgement */ }
+    else if (strcmp(t, "ping") == 0) {
+        send_json("{\"type\":\"pong\"}");
+    }
     else if (strcmp(t, "debug_log") == 0) { /* ignore */ }
     else {
         ESP_LOGW(TAG, "Unknown message type: %s", t);
@@ -310,6 +454,14 @@ void ws_protocol_register_voice_callbacks(ws_on_voice_ready_cb_t voice_ready_cb,
     s_stt_final_cb   = stt_final_cb;
     s_turn_state_cb  = turn_state_cb;
     s_voice_cb_arg   = arg;
+}
+
+void ws_protocol_register_extended_callbacks(const ws_extended_callbacks_t *callbacks,
+                                              void *arg)
+{
+    if (callbacks) s_ext_cb = *callbacks;
+    else memset(&s_ext_cb, 0, sizeof(s_ext_cb));
+    s_ext_cb_arg = arg;
 }
 
 int ws_protocol_build_stt_audio(const int16_t *pcm_data, size_t sample_count,
@@ -350,6 +502,7 @@ esp_err_t ws_client_init(void)
 esp_err_t ws_client_connect(const char *url)
 {
     ESP_LOGI(TAG, "Connecting WS: %s", url);
+    s_ready = false;
 
     if (s_ws_client) {
         esp_websocket_client_destroy(s_ws_client);
@@ -404,6 +557,7 @@ void ws_client_disconnect(void)
 }
 
 bool ws_client_is_connected(void) { return s_connected; }
+bool ws_client_is_ready(void) { return s_connected && s_ready; }
 
 esp_err_t ws_client_send_hello(void)
 {
@@ -411,7 +565,7 @@ esp_err_t ws_client_send_hello(void)
     config_get(&cfg);
     snprintf(s_json_buf, sizeof(s_json_buf),
              "{\"type\":\"hello\",\"device_id\":\"%s\",\"agent\":\"%s\","
-             "\"app_version\":2}",
+             "\"persona\":\"voice\",\"app_version\":3}",
              cfg.device_id, cfg.agent);
     send_json(s_json_buf);
     return ESP_OK;
@@ -494,14 +648,33 @@ esp_err_t ws_client_send_voice_session_start(void)
 
 esp_err_t ws_client_send_voice_session_stop(void)
 {
-    snprintf(s_json_buf, sizeof(s_json_buf), "{\"type\":\"voice_session_stop\"}");
+    app_config_t cfg;
+    config_get(&cfg);
+    snprintf(s_json_buf, sizeof(s_json_buf),
+             "{\"type\":\"voice_session_stop\",\"device_id\":\"%s\"}",
+             cfg.device_id);
+    send_json(s_json_buf);
+    return ESP_OK;
+}
+
+esp_err_t ws_client_send_voice_session_idle(const char *reason)
+{
+    app_config_t cfg;
+    config_get(&cfg);
+    snprintf(s_json_buf, sizeof(s_json_buf),
+             "{\"type\":\"voice_session_idle\",\"device_id\":\"%s\",\"reason\":\"%s\"}",
+             cfg.device_id, reason ? reason : "idle");
     send_json(s_json_buf);
     return ESP_OK;
 }
 
 esp_err_t ws_client_send_voice_turn_complete(void)
 {
-    snprintf(s_json_buf, sizeof(s_json_buf), "{\"type\":\"voice_turn_complete\"}");
+    app_config_t cfg;
+    config_get(&cfg);
+    snprintf(s_json_buf, sizeof(s_json_buf),
+             "{\"type\":\"voice_turn_complete\",\"device_id\":\"%s\"}",
+             cfg.device_id);
     send_json(s_json_buf);
     ESP_LOGI(TAG, "voice_turn_complete sent");
     return ESP_OK;
@@ -586,7 +759,7 @@ static esp_err_t proto_send_hello(protocol_t *self, const char *device_id,
     (void)self;
     snprintf(s_json_buf, sizeof(s_json_buf),
              "{\"type\":\"hello\",\"device_id\":\"%s\",\"agent\":\"%s\","
-             "\"app_version\":2}",
+             "\"persona\":\"voice\",\"app_version\":3}",
              device_id, agent);
     send_json(s_json_buf);
     return ESP_OK;

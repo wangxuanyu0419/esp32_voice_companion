@@ -24,18 +24,20 @@ set(SRCS
     "framework/protocol/ws_protocol.c"
     "framework/audio/audio_pipeline.c"
     "framework/audio/vad.c"
+    "framework/audio/pcm_stream_player.c"
     "framework/audio/tts_player.c"
     "framework/display/scene_avatar.c"
+    "framework/display/cbin_font.c"
     "framework/display/font_manager.c"
     "framework/display/emotion_map.c"
     "framework/display/ui_theme.c"
     "framework/display/ui_status_bar.c"
     "framework/display/scene_chat.c"
+    "framework/display/remote_image.c"
 
     # Layer 4 — Apps
     "apps/app_registry.c"
     "apps/chat/chat_app.c"
-    "apps/launcher/launcher_app.c"
     "apps/settings/settings_app.c"
     "apps/media_player/media_player_app.c"
 
@@ -108,6 +110,8 @@ idf_component_register(
         espressif__esp_lcd_sh8601
         espressif__esp_lcd_touch_ft5x06
         espressif__esp_io_expander_tca9554
+        # Local Espressif audio codec (M4A/MP3/WAV -> PCM)
+        esp_audio_codec
         esp_lcd
 )
 

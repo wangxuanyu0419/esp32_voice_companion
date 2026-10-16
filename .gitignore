@@ -20,3 +20,9 @@ managed_components/
 __pycache__/
 *.pyc
 credentials.txt
+
+# Machine-local network credentials and tokens
+*.local.h
+.env
+.env.*
+!.env.example

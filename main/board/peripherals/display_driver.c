@@ -88,6 +88,7 @@ static lv_disp_draw_buf_t        s_draw_buf;
 static SemaphoreHandle_t         s_lvgl_mux     = NULL;
 static esp_timer_handle_t        s_tick_timer   = NULL;
 static i2c_master_bus_handle_t   s_i2c_bus      = NULL; /* saved for diagnostics */
+static bool                      s_touch_active = false;
 
 /* -------------------------------------------------------------------------
  * LVGL tick (called by esp_timer every 2 ms)
@@ -155,8 +156,15 @@ static void lvgl_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         data->point.x = touch_x[0];
         data->point.y = touch_y[0];
         data->state   = LV_INDEV_STATE_PRESSED;
+        if (!s_touch_active) {
+            ESP_LOGI(TAG, "Touch press x=%u y=%u", (unsigned)touch_x[0],
+                     (unsigned)touch_y[0]);
+        }
+        s_touch_active = true;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
+        if (s_touch_active) ESP_LOGI(TAG, "Touch release");
+        s_touch_active = false;
     }
 }
 

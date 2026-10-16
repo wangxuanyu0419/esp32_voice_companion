@@ -14,11 +14,16 @@
 #include "esp_err.h"
 
 typedef void (*tts_on_complete_cb_t)(void *arg);
+typedef void (*tts_on_start_cb_t)(void *arg);
 
 esp_err_t tts_player_init(void);
 
 /* Submit text for TTS playback.  Non-blocking; the player task does the work. */
 esp_err_t tts_player_play(const char *text);
+
+/* Submit one server-issued audio-broadcast stream. The stream id is validated
+ * and resolved against the configured server; no arbitrary URL is accepted. */
+esp_err_t tts_player_play_audio_stream(const char *stream_id);
 
 /* Stop current playback immediately.  Safe to call from any task. */
 void tts_player_stop(void);
@@ -27,5 +32,7 @@ bool tts_player_is_playing(void);
 
 /* Callback fired on the player task when playback finishes. */
 void tts_player_register_complete_callback(tts_on_complete_cb_t cb, void *arg);
+/* Callback fires only after the first PCM block is accepted by I2S. */
+void tts_player_register_start_callback(tts_on_start_cb_t cb, void *arg);
 
 #endif /* TTS_PLAYER_H */

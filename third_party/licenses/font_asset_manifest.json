@@ -1,0 +1,20 @@
+{
+  "runtime_manifest": "spiffs_data/font_common_manifest.json",
+  "license_file": "third_party/licenses/NotoSansCJK-OFL-1.1.txt",
+  "license": "SIL Open Font License 1.1",
+  "copyright": "(c) 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.",
+  "attribution": "The Noto CJK fonts are developed by Google and Adobe. Copyright is held by Adobe; trademarks on the names are held by Google.",
+  "source": "https://github.com/notofonts/noto-cjk",
+  "distribution_source": "https://github.com/78/xiaozhi-fonts",
+  "converter": "78/lv_font_conv@c420999fe79adb0bc2a480c4a64fd33fc6e34519",
+  "files": {
+    "spiffs_data/font_noto_sans_common_16_4.bin": {
+      "bytes": 885948,
+      "sha256": "6C801B34EC686E6E31223ECEEDEA2EFE5B0CF294B3556D91087A683C86A54384"
+    },
+    "spiffs_data/font_noto_sans_common_20_4.bin": {
+      "bytes": 1287460,
+      "sha256": "82F0D5E97E8423BD6D6ECD4D53E0AED742704565B1DCC21124F90658D7D4C40E"
+    }
+  }
+}

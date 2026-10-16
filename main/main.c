@@ -18,9 +18,7 @@
 #include "sleep_manager.h"
 #include "ui_theme.h"
 #include "chat_app.h"
-#include "launcher_app.h"
 #include "settings_app.h"
-#include "media_player_app.h"
 #include "app_registry.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -144,7 +142,13 @@ static void event_handler_task(void *arg)
 
     event_t evt;
     while (1) {
-        if (event_bus_receive(&evt, 100) == ESP_OK) {
+        /* event_bus_receive() maps timeout_ms==UINT32_MAX to portMAX_DELAY
+         * (see event_bus.c).  The previous 100 ms bound only mattered if the
+         * loop needed to do something on a timeout; it does not (there is no
+         * `else` branch and no periodic housekeeping here), so blocking
+         * indefinitely removes ~10 wakeups/second at idle with no behavior
+         * change. */
+        if (event_bus_receive(&evt, UINT32_MAX) == ESP_OK) {
             switch (evt.type) {
                 case EVT_WIFI_CONNECTED:
                     ESP_LOGI(TAG, "[EVT] WiFi connected");
@@ -168,6 +172,15 @@ static void event_handler_task(void *arg)
                     break;
                 case EVT_BUTTON_RELEASE:
                     ESP_LOGI(TAG, "[EVT] Button released");
+                    chat_app_handle_button_event(false);
+                    ESP_LOGI(TAG, "[EVT] Button short dispatch stack_free=%u",
+                             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+                    break;
+                case EVT_BUTTON_LONG_PRESS:
+                    ESP_LOGI(TAG, "[EVT] Button long press");
+                    chat_app_handle_button_event(true);
+                    ESP_LOGI(TAG, "[EVT] Button long dispatch stack_free=%u",
+                             (unsigned)uxTaskGetStackHighWaterMark(NULL));
                     break;
                 case EVT_APP_SWITCH: {
                     const char *target = (const char *)evt.data.ptr;
@@ -235,11 +248,13 @@ static void heartbeat_task(void *arg)
 {
     uint32_t tick = 0;
     for (;;) {
-        ESP_LOGI(TAG, "♥ heartbeat #%lu — WiFi:%s WS:%s heap:%lu",
+        UBaseType_t stack_free = uxTaskGetStackHighWaterMark(NULL);
+        ESP_LOGI(TAG, "♥ heartbeat #%lu — WiFi:%s WS:%s heap:%lu stack_free:%u",
                  (unsigned long)++tick,
                  wifi_is_connected()      ? "up"   : "down",
                  ws_client_is_connected() ? "up"   : "down",
-                 (unsigned long)esp_get_free_heap_size());
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned)stack_free);
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
@@ -274,19 +289,20 @@ void app_main(void)
     application_init_all();
 
     /* Layer 4: Apps */
-    ESP_ERROR_CHECK(launcher_app_init());
     ESP_ERROR_CHECK(chat_app_init());
     ESP_ERROR_CHECK(settings_app_init());
-    ESP_ERROR_CHECK(media_player_app_init());
     ESP_ERROR_CHECK(app_registry_init());
-    /* Start at launcher */
-    ESP_ERROR_CHECK(app_registry_launch("launcher"));
+    /* ClawChat is the single root surface; settings is opened from its gear. */
+    ESP_ERROR_CHECK(app_registry_launch("chat"));
 
     /* Kick off tasks */
     application_run();
 
     /* Periodic heartbeat visible in the web monitor */
-    xTaskCreate(heartbeat_task, "heartbeat", 2048, NULL, 1, NULL);
+    /* Heartbeat logging traverses the WiFi/WS status paths and was observed
+     * at only 56 words free with the legacy 2048-word stack. Keep this small
+     * diagnostic task isolated, but leave a measured safety margin. */
+    xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 1, NULL);
 
     ESP_LOGI(TAG, "Boot complete — scheduler running");
     /* app_main returns; FreeRTOS scheduler owns the CPU */

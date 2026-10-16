@@ -29,4 +29,12 @@ esp_err_t chat_app_init(void);
  */
 void chat_app_toggle_recording(void);
 
+/* Handle a physical BOOT-button event on the application/event-owner task.
+ * The low-level button poller only posts a bounded event; it must not enter
+ * the WS/audio/session call chain on its 2048-word stack. */
+void chat_app_handle_button_event(bool long_press);
+
+/* Called by the modal ClawChat settings page after returning to the root. */
+void chat_app_settings_closed(void);
+
 #endif /* CHAT_APP_H */

@@ -1,26 +1,32 @@
 /*
- * font_manager.c — SPIFFS + LVGL binary font loader.
+ * font_manager.c — SPIFFS + LVGL font loader.
  *
- * Fonts are stored in the SPIFFS partition (9.9 MB) as binary files generated
- * by lv_font_conv --format bin.  They are loaded at startup by lv_font_load()
- * which allocates the entire font bitmap data in heap (→ PSRAM on ESP32-S3
- * because CONFIG_SPIRAM_USE_MALLOC=y redirects allocations > 16 KB there).
+ * The primary assets are legacy CBIN files from the previously validated
+ * xiaozhi-fonts bundle.  cbin_font.c adapts them to the LVGL 8 callback ABI;
+ * the older LVGL BIN files remain as a compatibility fallback.
  *
- * Path mapping:  LVGL drive 'S' + LV_FS_POSIX_PATH "" →
- *   lv_font_load("S:/spiffs/puhui_20.bin")  →  fopen("/spiffs/puhui_20.bin")
+ * Path mapping for the fallback LVGL BIN files remains LVGL drive 'S'.
  */
 
 #include "font_manager.h"
+#include "cbin_font.h"
 #include "ui_fonts.h"          /* fallback flash fonts */
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "esp_timer.h"
+#include <stdio.h>
 #include <sys/stat.h>
+#include <inttypes.h>
 
 static const char *TAG = "FONT_MGR";
 
 /* Public pointers — set by font_manager_init(), fallback to flash fonts */
 lv_font_t *g_font_cn_20 = NULL;
 lv_font_t *g_font_cn_16 = NULL;
+
+/* CBIN wrappers own their PSRAM buffers for the lifetime of the application. */
+static cbin_font_t *s_cbin_font_20 = NULL;
+static cbin_font_t *s_cbin_font_16 = NULL;
 
 /* ── SPIFFS mount ─────────────────────────────────────────────────────────── */
 static esp_err_t spiffs_mount(void)
@@ -49,7 +55,8 @@ static esp_err_t spiffs_mount(void)
 }
 
 /* ── Load one font, return fallback on failure ────────────────────────────── */
-static lv_font_t *load_font(const char *spiffs_path, const lv_font_t *fallback)
+static lv_font_t *load_legacy_font(const char *spiffs_path,
+                                   const lv_font_t *fallback)
 {
     /* Quick existence check before handing path to LVGL */
     struct stat st;
@@ -73,6 +80,55 @@ static lv_font_t *load_font(const char *spiffs_path, const lv_font_t *fallback)
     return f;
 }
 
+/* Load one official legacy CBIN file into a single PSRAM-backed buffer. */
+static cbin_font_t *load_cbin_file(const char *spiffs_path)
+{
+    struct stat st;
+    if (stat(spiffs_path, &st) != 0 || st.st_size <= 0) {
+        ESP_LOGW(TAG, "CBIN font not found: %s", spiffs_path);
+        return NULL;
+    }
+
+    /* The common 16/20 profiles are below 2 MB; reject corrupt files. */
+    if ((uint64_t)st.st_size > (uint64_t)(4 * 1024 * 1024)) {
+        ESP_LOGE(TAG, "CBIN font is unexpectedly large: %s (%ld bytes)",
+                 spiffs_path, (long)st.st_size);
+        return NULL;
+    }
+
+    FILE *fp = fopen(spiffs_path, "rb");
+    if (!fp) {
+        ESP_LOGW(TAG, "Cannot open CBIN font: %s", spiffs_path);
+        return NULL;
+    }
+
+    size_t size = (size_t)st.st_size;
+    uint8_t *data = lv_mem_alloc(size);
+    if (!data) {
+        ESP_LOGE(TAG, "CBIN allocation failed: %s (%u KB)", spiffs_path,
+                 (unsigned)(size / 1024));
+        fclose(fp);
+        return NULL;
+    }
+
+    size_t got = fread(data, 1, size, fp);
+    fclose(fp);
+    if (got != size) {
+        ESP_LOGE(TAG, "CBIN read truncated: %s (%u/%u bytes)", spiffs_path,
+                 (unsigned)got, (unsigned)size);
+        lv_mem_free(data);
+        return NULL;
+    }
+
+    cbin_font_t *font = cbin_font_create(data, size);
+    if (!font) {
+        ESP_LOGE(TAG, "CBIN validation failed: %s", spiffs_path);
+        lv_mem_free(data);
+        return NULL;
+    }
+    return font;
+}
+
 /* ── Public API ───────────────────────────────────────────────────────────── */
 esp_err_t font_manager_init(void)
 {
@@ -84,8 +140,33 @@ esp_err_t font_manager_init(void)
         return ret;
     }
 
-    g_font_cn_20 = load_font("/spiffs/puhui_20.bin", UI_FONT_TEXT);
-    g_font_cn_16 = load_font("/spiffs/puhui_16.bin", UI_FONT_TEXT_SM);
+    /* Loading is synchronous; retain timing evidence because the two CBIN
+     * buffers are intentionally kept alive for the application's lifetime. */
+    int64_t font_load_start_us = esp_timer_get_time();
+
+    /* Prefer the broad common CJK assets.  Keep the old files as a safe
+     * fallback for a staged SPIFFS update or a device with an older image. */
+    s_cbin_font_20 = load_cbin_file("/spiffs/font_noto_sans_common_20_4.bin");
+    s_cbin_font_16 = load_cbin_file("/spiffs/font_noto_sans_common_16_4.bin");
+
+    if (s_cbin_font_20) {
+        g_font_cn_20 = (lv_font_t *)cbin_font_get(s_cbin_font_20);
+        g_font_cn_20->fallback = UI_FONT_TEXT;
+    }
+    else {
+        g_font_cn_20 = load_legacy_font("/spiffs/puhui_20.bin", UI_FONT_TEXT);
+    }
+
+    if (s_cbin_font_16) {
+        g_font_cn_16 = (lv_font_t *)cbin_font_get(s_cbin_font_16);
+        g_font_cn_16->fallback = UI_FONT_TEXT_SM;
+    }
+    else {
+        g_font_cn_16 = load_legacy_font("/spiffs/puhui_16.bin", UI_FONT_TEXT_SM);
+    }
+
+    ESP_LOGI(TAG, "Font load finished (%" PRId64 " ms)",
+             (esp_timer_get_time() - font_load_start_us) / 1000);
 
     bool all_ok = (g_font_cn_20 != UI_FONT_TEXT) &&
                   (g_font_cn_16 != UI_FONT_TEXT_SM);

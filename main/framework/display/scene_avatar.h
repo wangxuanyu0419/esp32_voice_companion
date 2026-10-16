@@ -3,6 +3,7 @@
 
 #include "app_state.h"
 #include "emotion_map.h"
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "lvgl.h"
@@ -16,6 +17,11 @@ void       avatar_reset_screen(void);   /* destroy + rebuild with new theme */
 /* Tap callback — registered by chat_app; fired when user taps the avatar image */
 void avatar_set_tap_callback(void (*cb)(void));
 
+/* Settings callback — fired by the in-app gear button.  Keeping navigation
+ * outside the display layer lets the chat app reuse the existing settings
+ * page without bringing the launcher/home screen back into the flow. */
+void avatar_set_settings_callback(void (*cb)(void));
+
 /* Assistant reply bubble (grey/white) */
 void avatar_show_assistant_text(const char *text);
 void avatar_clear_assistant_text(void);
@@ -26,6 +32,13 @@ void avatar_show_user_text(const char *text);
 /* Legacy stubs — kept for backward-compat; no-ops in the new design */
 esp_err_t        avatar_set_emotion(avatar_emotion_t emotion);
 esp_err_t        avatar_set_emotion_with_duration(avatar_emotion_t emotion, int duration_ms);
+esp_err_t        avatar_set_emotion_with_return(avatar_emotion_t emotion,
+                                                int duration_ms,
+                                                avatar_emotion_t return_emotion);
+/* Takes ownership of data.  The buffer must remain heap allocated; it is
+ * released after the LVGL image is replaced or rejected. */
+void             avatar_show_image_owned(uint8_t *data, size_t len,
+                                         const char *caption);
 esp_err_t        avatar_show_message(const char *msg);
 esp_err_t        avatar_clear_message(void);
 avatar_emotion_t avatar_get_current_emotion(void);

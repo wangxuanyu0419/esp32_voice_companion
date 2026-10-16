@@ -12,6 +12,9 @@ typedef enum {
 
 esp_err_t   vad_init(void);
 void        vad_reset(void);
+/* Android-compatible mean-absolute-energy configuration. */
+void        vad_configure(int manual_threshold, bool automatic);
+int32_t     vad_get_effective_threshold(void);
 vad_state_t vad_process_frame(const int16_t *pcm_frame, size_t frame_size);
 int32_t     vad_get_energy(void);
 void        vad_set_sensitivity(int level);

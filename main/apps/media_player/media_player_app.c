@@ -321,6 +321,7 @@ static void wav_player_task(void *arg)
     wav_info_t info;
     memcpy(&info, arg, sizeof(info));
     free(arg);
+    bool power_held = false;
 
     FILE *f = fopen(info.path, "rb");
     if (!f) goto done;
@@ -338,6 +339,11 @@ static void wav_player_task(void *arg)
         free(out);
         goto close_done;
     }
+
+    /* This path writes i2s_channel_write() directly instead of going through
+     * audio_write_pcm(), so it must hold the power gate itself. */
+    audio_power_acquire("media_wav");
+    power_held = true;
 
     s_is_playing = true;
     uint32_t left = info.data_size;
@@ -367,6 +373,7 @@ static void wav_player_task(void *arg)
 close_done:
     fclose(f);
 done:
+    if (power_held) audio_power_release("media_wav");
     s_is_playing = false;
     s_stop_playback = false;
     s_player_task = NULL;

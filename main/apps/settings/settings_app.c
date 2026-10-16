@@ -17,7 +17,6 @@
  */
 
 #include "settings_app.h"
-#include "app_registry.h"
 #include "config_store.h"
 #include "wifi_manager.h"
 #include "ws_protocol.h"
@@ -26,9 +25,9 @@
 #include "ui_theme.h"
 #include "ui_fonts.h"
 #include "ui_status_bar.h"
-#include "launcher_app.h"
-#include "scene_chat.h"
 #include "scene_avatar.h"
+#include "audio_pipeline.h"
+#include "vad.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -52,7 +51,12 @@ static lv_obj_t *s_heap_val      = NULL;
 static lv_obj_t *s_uptime_val    = NULL;
 static lv_obj_t *s_dim_dd        = NULL;   /* dim-timeout dropdown */
 static lv_obj_t *s_sleep_dd      = NULL;   /* sleep-timeout dropdown */
+static lv_obj_t *s_volume_slider = NULL;
+static lv_obj_t *s_volume_value  = NULL;
+static lv_obj_t *s_vad_slider    = NULL;
+static lv_obj_t *s_vad_value     = NULL;
 static lv_timer_t *s_refresh_timer = NULL;
+static settings_close_cb_t s_close_cb = NULL;
 
 /* -------------------------------------------------------------------------
  * Timeout option tables
@@ -107,6 +111,55 @@ static lv_obj_t *make_row(lv_obj_t *parent,
     return row;
 }
 
+static lv_obj_t *make_slider_row(lv_obj_t *parent, const char *label,
+                                  int min_value, int max_value, int initial,
+                                  lv_event_cb_t cb, lv_obj_t **slider_out,
+                                  lv_obj_t **value_out)
+{
+    const ui_theme_t *th = ui_theme_get();
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_size(row, DISPLAY_H_RES - 32, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row, th->card, 0);
+    lv_obj_set_style_bg_opa(row, LV_OPA_100, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_ver(row, 9, 0);
+    lv_obj_set_style_pad_hor(row, 14, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, label);
+    lv_obj_set_width(lbl, 82);
+    lv_obj_set_style_text_color(lbl, th->text_dim, 0);
+    lv_obj_set_style_text_font(lbl, UI_FONT_TEXT, 0);
+    lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
+
+    lv_obj_t *slider = lv_slider_create(row);
+    lv_obj_set_width(slider, 158);
+    lv_slider_set_range(slider, min_value, max_value);
+    lv_slider_set_value(slider, initial, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider, th->border, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, th->accent, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, th->accent, LV_PART_KNOB);
+    lv_obj_add_event_cb(slider, cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *value = lv_label_create(row);
+    lv_obj_set_width(value, 52);
+    lv_obj_set_style_text_color(value, th->text, 0);
+    lv_obj_set_style_text_font(value, UI_FONT_TEXT, 0);
+    lv_obj_set_style_bg_opa(value, LV_OPA_TRANSP, 0);
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%d", initial);
+    lv_label_set_text(value, buf);
+
+    if (slider_out) *slider_out = slider;
+    if (value_out) *value_out = value;
+    return row;
+}
+
 static void refresh_dynamic_rows(void)
 {
     if (!s_screen) return;
@@ -145,11 +198,11 @@ static void refresh_timer_cb(lv_timer_t *t)
     refresh_dynamic_rows();
 }
 
-/* Back button → return to launcher */
+/* Back button → return to the single ClawChat root surface. */
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
-    app_registry_launch("launcher");
+    settings_app_close();
 }
 
 /* -------------------------------------------------------------------------
@@ -247,9 +300,9 @@ static void theme_toggle_cb(lv_event_t *e)
     /* 2. Apply theme */
     ui_theme_set_dark(dark);
 
-    /* 3. Invalidate all screens so they rebuild with the new theme */
-    launcher_app_reset_screen();
-    scene_chat_reset();
+    /* 3. Invalidate the ClawChat avatar screen so it rebuilds with the theme.
+     * The settings page itself is rebuilt below; no launcher/home screen is
+     * involved in this root-only UI. */
     avatar_reset_screen();
 
     /* 4. Rebuild settings screen in-place */
@@ -265,6 +318,10 @@ static void theme_toggle_cb(lv_event_t *e)
     s_uptime_val = NULL;
     s_dim_dd     = NULL;
     s_sleep_dd   = NULL;
+    s_volume_slider = NULL;
+    s_volume_value  = NULL;
+    s_vad_slider    = NULL;
+    s_vad_value     = NULL;
 
     build_ui();
     lv_scr_load(s_screen);
@@ -335,6 +392,41 @@ static void sleep_dd_cb(lv_event_t *e)
     config_save(&cfg);
     sleep_manager_set_timeouts(cfg.dim_timeout_s, cfg.sleep_timeout_s);
     ESP_LOGI(TAG, "Sleep timeout set to %u s", cfg.sleep_timeout_s);
+}
+
+static void volume_slider_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    int value = (int)lv_slider_get_value(slider);
+    app_config_t cfg = {0};
+    if (config_get(&cfg) != ESP_OK) return;
+    cfg.volume = value;
+    if (config_save(&cfg) != ESP_OK) return;
+    audio_set_volume(value);
+    if (s_volume_value) {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%d", value);
+        lv_label_set_text(s_volume_value, buf);
+    }
+    ESP_LOGI(TAG, "Volume slider saved=%d", value);
+}
+
+static void vad_slider_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    int value = (int)lv_slider_get_value(slider);
+    app_config_t cfg = {0};
+    if (config_get(&cfg) != ESP_OK) return;
+    cfg.vad_threshold = value;
+    if (config_save(&cfg) != ESP_OK) return;
+    vad_configure(cfg.vad_threshold, cfg.vad_auto_threshold);
+    if (s_vad_value) {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%d", value);
+        lv_label_set_text(s_vad_value, buf);
+    }
+    ESP_LOGI(TAG, "VAD minimum slider saved=%d auto=%d",
+             value, cfg.vad_auto_threshold ? 1 : 0);
 }
 
 /* -------------------------------------------------------------------------
@@ -506,13 +598,14 @@ static void build_ui(void)
     }
 
     /* Static rows */
-    char buf[64];
-
     make_row(content, "WebSocket", "—", &s_ws_val);
     make_row(content, "Device", cfg.device_id, NULL);
 
-    snprintf(buf, sizeof(buf), "%d%%", cfg.volume);
-    make_row(content, "Volume", buf, NULL);
+    make_slider_row(content, "Volume", 0, 100, cfg.volume,
+                    volume_slider_cb, &s_volume_slider, &s_volume_value);
+    make_slider_row(content, "VAD minimum", MIN_VAD_THRESHOLD,
+                    MAX_VAD_THRESHOLD, cfg.vad_threshold,
+                    vad_slider_cb, &s_vad_slider, &s_vad_value);
 
     /* Separator */
     lv_obj_t *sep = lv_obj_create(content);
@@ -600,7 +693,7 @@ static void build_ui(void)
 static esp_err_t settings_on_enter(app_t *self)
 {
     (void)self;
-    ESP_LOGI(TAG, "Settings enter");
+    ESP_LOGI(TAG, "Settings page enter");
     if (!s_screen) build_ui();
 
     refresh_dynamic_rows();
@@ -618,8 +711,35 @@ static esp_err_t settings_on_enter(app_t *self)
 static void settings_on_exit(app_t *self)
 {
     (void)self;
-    ESP_LOGI(TAG, "Settings exit");
+    ESP_LOGI(TAG, "Settings page exit");
     if (s_refresh_timer) lv_timer_pause(s_refresh_timer);
+}
+
+void settings_app_open(void)
+{
+    settings_on_enter(NULL);
+}
+
+void settings_app_close(void)
+{
+    settings_on_exit(NULL);
+
+    /* Theme changes intentionally destroy the avatar screen.  Recreate it
+     * lazily here before returning to the root scene. */
+    if (!avatar_get_screen()) {
+        if (avatar_init() != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to rebuild ClawChat root after settings");
+            return;
+        }
+    }
+    lv_scr_load_anim(avatar_get_screen(), LV_SCR_LOAD_ANIM_MOVE_RIGHT,
+                     250, 0, false);
+    if (s_close_cb) s_close_cb();
+}
+
+void settings_app_set_close_callback(settings_close_cb_t cb)
+{
+    s_close_cb = cb;
 }
 
 static void settings_on_event(app_t *self, const event_t *evt)

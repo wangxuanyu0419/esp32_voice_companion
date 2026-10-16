@@ -16,6 +16,7 @@
 #include "audio_pipeline.h"
 #include "display_driver.h"
 #include "ws_protocol.h"
+#include "config_store.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/i2s_std.h"
@@ -78,6 +79,34 @@ static audio_capture_cb_t s_capture_cb     = NULL;
 static void              *s_capture_cb_arg  = NULL;
 
 static SemaphoreHandle_t  s_audio_mutex      = NULL;
+
+/* Signalled by audio_capture_task right before it deletes itself, so
+ * audio_stop_capture() can wait for the in-flight i2s_channel_read() to
+ * actually return before the power gate disables the RX channel underneath
+ * it (see audio_power_release() below). */
+static SemaphoreHandle_t  s_capture_done_sem = NULL;
+
+/* ── Audio hardware power gate ────────────────────────────────────────────
+ * Reference-counted: the ES8311 codec, the I2S TX/RX channels, and the
+ * speaker PA (GPIO46) are only powered while >=1 consumer (mic capture, TTS
+ * playback, PCM-stream playback, or the media player's raw-I2S WAV playback)
+ * holds the gate.  Protected by a mutex so acquire/release from different
+ * tasks (recording, tts_player, pcm_stream_player, media_player) can never
+ * race, and release() refuses to go below zero instead of underflowing. */
+static SemaphoreHandle_t  s_power_mutex   = NULL;
+static int                s_power_refcount = 0;  /* 0 == hardware gated off */
+
+/* Settle time budget, split the same way audio_init() already proved safe:
+ *   - 10 ms after re-enabling the I2S channels, before touching the codec
+ *     over I2C, for MCLK/BCLK to stabilise.
+ *   - 10 ms after restoring the codec's analog/DAC power registers, before
+ *     re-enabling the HP/output driver register and the external PA, so the
+ *     analog stage settles and we don't audibly pop the speaker.
+ * Total worst-case power-up latency: ~20 ms, paid only by the FIRST consumer
+ * to acquire (subsequent acquires while already powered are refcount-only
+ * and add no delay). */
+#define AUDIO_POWER_I2S_SETTLE_MS     10
+#define AUDIO_POWER_ANALOG_SETTLE_MS  10
 
 /* Chunk queue — AUDIO_CHUNK_SAMPLES mono int16_t per slot */
 static QueueHandle_t      s_chunk_queue      = NULL;
@@ -187,8 +216,9 @@ static esp_err_t es8311_init(void)
     ESP_RETURN_ON_ERROR(es8311_write(ES8311_REG_ADC17, 0xC8), TAG, "ADC17");  /* ADC digital gain */
     ESP_RETURN_ON_ERROR(es8311_write(ES8311_REG_ADC1C, 0x6A), TAG, "ADC1C");  /* ADC equalize bypass */
 
-    /* DAC: set volume to 80%, bypass equalizer */
-    ESP_RETURN_ON_ERROR(es8311_write(ES8311_REG_DAC32, 0xCB), TAG, "DAC32");  /* 80% vol */
+    /* Start at the legacy level; audio_init() applies the persisted volume
+     * after config_store has performed its one-time migration. */
+    ESP_RETURN_ON_ERROR(es8311_write(ES8311_REG_DAC32, 0xCB), TAG, "DAC32");
     ESP_RETURN_ON_ERROR(es8311_write(ES8311_REG_DAC37, 0x08), TAG, "DAC37");  /* DAC EQ bypass */
 
     ESP_LOGI(TAG, "ES8311 init OK (16kHz/16bit/I2S slave)");
@@ -252,6 +282,96 @@ static esp_err_t i2s_init(void)
     return ESP_OK;
 }
 
+/* ── ES8311 power gate register sequences ─────────────────────────────────
+ * These touch exactly the four registers audio_init()/es8311_init() sets to
+ * bring the codec up (CLK1, SYS0D, SYS12, SYS13); every other register
+ * (I2S format, mic/PGA select, ADC/DAC volume, EQ bypass) is configured once
+ * at boot and left alone — it does not need to be re-applied on power-up.
+ * The power-down values are the documented power-up values reversed (a
+ * cleared enable bit / cleared clock-enable field), derived from the same
+ * comments already in es8311_init(); this is NOT independently verified
+ * against the ES8311 datasheet beyond what that function already encodes,
+ * so the actual idle-current drop and pop-free-ness of these writes still
+ * need to be confirmed on hardware (see report). */
+static void es8311_registers_power_down(void)
+{
+    /* Mute/disable the output driver first so nothing downstream pops while
+     * the analog rails and clocks are subsequently removed. */
+    es8311_write(ES8311_REG_SYS13, 0x00);  /* HP/output driver disable (was 0x10 enable) */
+    es8311_write(ES8311_REG_SYS12, 0x01);  /* DAC power down (was 0x00 power up)         */
+    es8311_write(ES8311_REG_SYS0D, 0x00);  /* analog power down (was 0x01 power up)      */
+    es8311_write(ES8311_REG_CLK1,  0x00);  /* gate all internal clocks (was 0x3F all on) */
+}
+
+static void es8311_registers_power_up(void)
+{
+    es8311_write(ES8311_REG_CLK1,  0x3F);  /* all clocks on, MCLK from pin (matches init) */
+    es8311_write(ES8311_REG_SYS0D, 0x01);  /* analog power up */
+    es8311_write(ES8311_REG_SYS12, 0x00);  /* DAC power up */
+    vTaskDelay(pdMS_TO_TICKS(AUDIO_POWER_ANALOG_SETTLE_MS));
+    es8311_write(ES8311_REG_SYS13, 0x10);  /* HP/output driver enable, last, to avoid a pop */
+}
+
+/* Hardware transition helpers.  Callers must hold s_power_mutex. */
+static void audio_hw_power_down(void)
+{
+    gpio_set_level(PA_EN_IO, 0);
+    es8311_registers_power_down();
+    if (s_tx_handle) i2s_channel_disable(s_tx_handle);
+    if (s_rx_handle) i2s_channel_disable(s_rx_handle);
+    ESP_LOGI(TAG, "Audio HW power DOWN (codec standby, I2S disabled, PA off)");
+}
+
+static void audio_hw_power_up(void)
+{
+    if (s_tx_handle) i2s_channel_enable(s_tx_handle);
+    if (s_rx_handle) i2s_channel_enable(s_rx_handle);
+    vTaskDelay(pdMS_TO_TICKS(AUDIO_POWER_I2S_SETTLE_MS));
+    es8311_registers_power_up();
+    vTaskDelay(pdMS_TO_TICKS(AUDIO_POWER_ANALOG_SETTLE_MS));
+    gpio_set_level(PA_EN_IO, 1);
+    ESP_LOGI(TAG, "Audio HW power UP (codec+I2S+PA), settle=%dms",
+             AUDIO_POWER_I2S_SETTLE_MS + 2 * AUDIO_POWER_ANALOG_SETTLE_MS);
+}
+
+/* ── Public power gate API ────────────────────────────────────────────────── */
+esp_err_t audio_power_acquire(const char *reason)
+{
+    if (!s_power_mutex) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_power_mutex, portMAX_DELAY);
+    int prev = s_power_refcount++;
+    ESP_LOGI(TAG, "Audio power ACQUIRE (%s): refcount %d -> %d",
+             reason ? reason : "?", prev, s_power_refcount);
+    if (prev == 0) {
+        audio_hw_power_up();
+    }
+    xSemaphoreGive(s_power_mutex);
+    return ESP_OK;
+}
+
+esp_err_t audio_power_release(const char *reason)
+{
+    if (!s_power_mutex) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_power_mutex, portMAX_DELAY);
+    if (s_power_refcount <= 0) {
+        /* Never go negative — a caller bug here must not corrupt the gate
+         * into thinking hardware is needed forever (or turn it off under a
+         * still-active consumer). */
+        ESP_LOGW(TAG, "Audio power RELEASE (%s) with refcount already 0 — ignored",
+                 reason ? reason : "?");
+        xSemaphoreGive(s_power_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+    int prev = s_power_refcount--;
+    ESP_LOGI(TAG, "Audio power RELEASE (%s): refcount %d -> %d",
+             reason ? reason : "?", prev, s_power_refcount);
+    if (s_power_refcount == 0) {
+        audio_hw_power_down();
+    }
+    xSemaphoreGive(s_power_mutex);
+    return ESP_OK;
+}
+
 /* ── Capture task ─────────────────────────────────────────────────────────── */
 static void audio_capture_task(void *arg)
 {
@@ -289,6 +409,7 @@ static void audio_capture_task(void *arg)
     }
 
     ESP_LOGI(TAG, "Capture task stopped");
+    if (s_capture_done_sem) xSemaphoreGive(s_capture_done_sem);
     vTaskDelete(NULL);
 }
 
@@ -299,6 +420,12 @@ esp_err_t audio_init(void)
     if (s_initialized) return ESP_OK;
 
     s_audio_mutex = xSemaphoreCreateMutex();
+    s_power_mutex = xSemaphoreCreateMutex();
+    s_capture_done_sem = xSemaphoreCreateBinary();
+    if (!s_audio_mutex || !s_power_mutex || !s_capture_done_sem) {
+        ESP_LOGE(TAG, "Audio mutex/semaphore creation failed");
+        return ESP_ERR_NO_MEM;
+    }
 
     s_chunk_queue = xQueueCreate(8, AUDIO_CHUNK_SIZE_BYTES);
     if (s_chunk_queue) {
@@ -343,17 +470,26 @@ esp_err_t audio_init(void)
     /* ── Init ES8311 via I2C ──────────────────────────────────────────────── */
     ESP_RETURN_ON_ERROR(es8311_init(), TAG, "ES8311 init");
 
-    /* ── Enable PA (speaker) ──────────────────────────────────────────────── */
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(PA_EN_IO, 1);
-    ESP_LOGI(TAG, "PA enabled (GPIO%d)", PA_EN_IO);
-
     s_initialized = true;
-    ESP_LOGI(TAG, "Audio pipeline ready");
 
-    /* M1 speaker bring-up: short tone proves I2S TX → ES8311 DAC → PA path.
-     * Remove once TTS playback is confirmed working. */
-    audio_play_test_tone(1000, 300);
+    /* Apply the migrated/user volume to the actual ES8311 DAC register.  This
+     * is a plain I2C write to a digital volume register (DAC32), independent
+     * of the four power registers the gate below controls, so it is safe to
+     * apply before the codec goes to standby. */
+    app_config_t cfg = {0};
+    if (config_get(&cfg) == ESP_OK) {
+        audio_set_volume(cfg.volume);
+    } else {
+        audio_set_volume(DEFAULT_VOLUME);
+    }
+
+    /* No consumer is active yet at boot (refcount==0) — go straight to the
+     * gated-off state instead of momentarily enabling the PA and then
+     * powering back down, which would risk an audible click.  PA_EN_IO is
+     * already low from the "avoid pop" setup above. */
+    audio_hw_power_down();
+
+    ESP_LOGI(TAG, "Audio pipeline ready (gated off, refcount=0)");
 
     return ESP_OK;
 }
@@ -372,6 +508,11 @@ esp_err_t audio_start_capture(void)
         while (xQueueReceive(s_chunk_queue, dummy, 0) == pdTRUE) {}
     }
 
+    /* Power the codec/I2S/PA on (no-op if another consumer already holds the
+     * gate) before starting the capture task that reads the RX channel. */
+    audio_power_acquire("capture");
+    if (s_capture_done_sem) xSemaphoreTake(s_capture_done_sem, 0);  /* clear stale signal */
+
     s_capturing = true;
     xTaskCreate(audio_capture_task, "audio_cap", 4096, NULL, 10, NULL);
     xSemaphoreGive(s_audio_mutex);
@@ -386,6 +527,8 @@ esp_err_t audio_stop_capture(void)
 
     xSemaphoreTake(s_audio_mutex, portMAX_DELAY);
 
+    bool was_capturing = s_capturing;
+
     if (s_capturing && s_chunk_accum_count > 0) {
         /* Flush partial chunk with zero-padding */
         while (s_chunk_accum_count < AUDIO_CHUNK_SAMPLES)
@@ -398,6 +541,17 @@ esp_err_t audio_stop_capture(void)
 
     s_capturing = false;
     xSemaphoreGive(s_audio_mutex);
+
+    if (was_capturing) {
+        /* Wait for audio_capture_task to actually exit before releasing the
+         * power gate: if this is the last consumer, release() disables the
+         * RX I2S channel, and doing that while i2s_channel_read() is still
+         * blocked on it (up to its 80 ms timeout) would race the driver.
+         * 200 ms leaves comfortable margin over that 80 ms read timeout. */
+        if (s_capture_done_sem) xSemaphoreTake(s_capture_done_sem, pdMS_TO_TICKS(200));
+        audio_power_release("capture");
+    }
+
     ESP_LOGI(TAG, "Audio capture stopped");
     return ESP_OK;
 }
@@ -430,18 +584,37 @@ bool      audio_is_playing(void)     { return s_playing; }
 #define PLAY_BLOCK_SAMPLES  256   /* mono samples per write block */
 static int16_t s_play_stereo[PLAY_BLOCK_SAMPLES * 2];
 
+/* The ES8311 register gives a useful coarse range, but a low slider value
+ * still sounded too hot with full-scale TTS PCM.  Keep the persisted slider
+ * and codec mapping intact, then add a bounded digital trim only in the
+ * bottom fifth of the range.  At 20 and above this is unity; below 20 it is
+ * quadratic, making the overall low end perceptually softer without changing
+ * sample rate, I2S framing, or the capture path. */
+static int32_t playback_pcm_gain_q15(void)
+{
+    int volume = s_volume;
+    if (volume <= 0) return 0;
+    if (volume >= 20) return 32768;
+    int64_t low = (int64_t)volume * 32768 / 20;
+    return (int32_t)((low * low + 16384) / 32768);
+}
+
 esp_err_t audio_write_pcm(const int16_t *mono, size_t samples, int timeout_ms)
 {
     if (!s_initialized || !s_tx_handle || !mono) return ESP_ERR_INVALID_STATE;
 
     size_t done = 0;
+    const int32_t gain_q15 = playback_pcm_gain_q15();
     while (done < samples) {
         size_t n = samples - done;
         if (n > PLAY_BLOCK_SAMPLES) n = PLAY_BLOCK_SAMPLES;
 
         for (size_t i = 0; i < n; i++) {
-            s_play_stereo[i * 2]     = mono[done + i];  /* L */
-            s_play_stereo[i * 2 + 1] = mono[done + i];  /* R */
+            int32_t sample = ((int32_t)mono[done + i] * gain_q15) >> 15;
+            if (sample > INT16_MAX) sample = INT16_MAX;
+            if (sample < INT16_MIN) sample = INT16_MIN;
+            s_play_stereo[i * 2]     = (int16_t)sample;  /* L */
+            s_play_stereo[i * 2 + 1] = (int16_t)sample;  /* R */
         }
 
         size_t written = 0;
@@ -449,6 +622,11 @@ esp_err_t audio_write_pcm(const int16_t *mono, size_t samples, int timeout_ms)
                                           n * 2 * sizeof(int16_t),
                                           &written, pdMS_TO_TICKS(timeout_ms));
         if (ret != ESP_OK) return ret;
+        if (written != n * 2 * sizeof(int16_t)) {
+            ESP_LOGW(TAG, "I2S short write: %u/%u bytes",
+                     (unsigned)written, (unsigned)(n * 2 * sizeof(int16_t)));
+            return ESP_ERR_TIMEOUT;
+        }
         done += n;
     }
     return ESP_OK;
@@ -465,6 +643,7 @@ esp_err_t audio_play_test_tone(int freq_hz, int duration_ms)
     const int16_t amp   = 8000;   /* ~25% full scale, comfortable level */
 
     ESP_LOGI(TAG, "Playing test tone: %d Hz, %d ms", freq_hz, duration_ms);
+    audio_power_acquire("test_tone");
     s_playing = true;
 
     int16_t block[PLAY_BLOCK_SAMPLES];
@@ -483,6 +662,7 @@ esp_err_t audio_play_test_tone(int freq_hz, int duration_ms)
     }
 
     s_playing = false;
+    audio_power_release("test_tone");
     ESP_LOGI(TAG, "Test tone done");
     return ESP_OK;
 }
@@ -493,8 +673,32 @@ esp_err_t audio_set_volume(int volume)
     if (volume > 100) volume = 100;
     s_volume = volume;
     if (s_es8311_dev) {
-        int reg32 = (volume == 0) ? 0 : ((volume * 256 / 100) - 1);
-        es8311_write(ES8311_REG_DAC32, (uint8_t)reg32);
+        /* Treat the old 80 setting (DAC32=0xCB, +6 dB) as unity.  Convert
+         * the requested percentage to a linear amplitude ratio, then use the
+         * ES8311's 0.5 dB DAC step.  This makes 24 exactly 30% amplitude of
+         * the old fixed level without mapping it to an effectively silent
+         * register code. */
+        int reg32 = 0;
+        float gain_db = -95.5f;
+        if (volume > 0) {
+            const float ratio = (float)volume / (float)LEGACY_DEFAULT_VOLUME;
+            gain_db = 6.0f + 20.0f * log10f(ratio);
+            if (gain_db < -95.5f) gain_db = -95.5f;
+            if (gain_db > 32.0f) gain_db = 32.0f;
+            reg32 = (int)lroundf(0xBF + (gain_db * 2.0f));
+            if (reg32 < 0) reg32 = 0;
+            if (reg32 > 0xFF) reg32 = 0xFF;
+        }
+        esp_err_t ret = es8311_write(ES8311_REG_DAC32, (uint8_t)reg32);
+        uint8_t actual_reg32 = 0;
+        esp_err_t read_ret = (ret == ESP_OK)
+                           ? es8311_read(ES8311_REG_DAC32, &actual_reg32)
+                           : ret;
+        ESP_LOGI(TAG, "Volume applied: %d/100 DAC32=0x%02X readback=0x%02X gain=%.1fdB pcm_gain=%ld/32768%s",
+                 volume, reg32, actual_reg32, gain_db,
+                 (long)playback_pcm_gain_q15(),
+                 ret == ESP_OK && read_ret == ESP_OK ? "" : " (codec I/O failed)");
+        if (ret != ESP_OK) return ret;
     }
     return ESP_OK;
 }

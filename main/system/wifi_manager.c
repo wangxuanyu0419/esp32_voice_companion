@@ -26,13 +26,11 @@ static const char *TAG = "WIFI_MANAGER";
 
 /* ── 已知网络列表（按优先级排列） ────────────────────────────────────────── */
 const wifi_known_net_t g_wifi_known_nets[] = {
-    { "AG Jacob",            "allBLACK#000000" },
-    { "AG_Jacob_Lab_2.4GHz", "allBLACK#000000" },
-    { "AG_Jacob_Lab_5GHz",   "allBLACK#000000" },
-    { "ChinaNet-Uba3",       "vxuwbfrj"         },
-    { "TP-Link_D7D8",        "31707619"         },
-    { "TP-Link_D7D8_5G",     "31707619"         },
-    { "Xuanyu's Redmi",      "19970525"         },
+#if __has_include("wifi_networks.local.h")
+#include "wifi_networks.local.h"
+#else
+#include "wifi_networks.example.h"
+#endif
 };
 const int g_wifi_known_nets_count =
     (int)(sizeof(g_wifi_known_nets) / sizeof(g_wifi_known_nets[0]));

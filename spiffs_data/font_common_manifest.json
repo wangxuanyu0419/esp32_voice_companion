@@ -1,0 +1,19 @@
+{
+  "source": "https://github.com/78/xiaozhi-fonts",
+  "source_revision": "main (CBIN assets downloaded 2026-09-24)",
+  "converter": "78/lv_font_conv@c420999fe79adb0bc2a480c4a64fd33fc6e34519",
+  "charset": "common",
+  "requested_codepoints": 7392,
+  "renderable_codepoints": 6845,
+  "verified_codepoints": ["U+55EF", "U+5443", "U+8BF6", "U+9608"],
+  "files": {
+    "font_noto_sans_common_16_4.bin": {
+      "bytes": 885948,
+      "sha256": "6C801B34EC686E6E31223ECEEDEA2EFE5B0CF294B3556D91087A683C86A54384"
+    },
+    "font_noto_sans_common_20_4.bin": {
+      "bytes": 1287460,
+      "sha256": "82F0D5E97E8423BD6D6ECD4D53E0AED742704565B1DCC21124F90658D7D4C40E"
+    }
+  }
+}

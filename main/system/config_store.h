@@ -12,6 +12,8 @@ typedef struct {
     char device_id[32];
     char agent[16];
     int  volume;
+    int  vad_threshold;       /* minimum mean-absolute PCM energy */
+    bool vad_auto_threshold;  /* adapt the noise floor like Android VAD */
     bool auto_play_tts;
     bool beep_feedback;
     /* Authentication — stored in NVS, sent as WebSocket headers */
@@ -28,7 +30,14 @@ typedef struct {
 #define DEFAULT_DEVICE_ID       "esp32s3_001"
 #define DEFAULT_AGENT           "main"
 #define DEFAULT_SERVER_URL      "wss://clawchat.xuanyu.uk/ws"
-#define DEFAULT_VOLUME          80
+#define DEFAULT_VOLUME          12
+#define PREVIOUS_DEFAULT_VOLUME 24
+#define LEGACY_DEFAULT_VOLUME   80
+#define AUDIO_VOLUME_MIGRATION_VERSION 2
+#define DEFAULT_VAD_THRESHOLD   200
+#define MIN_VAD_THRESHOLD       80
+#define MAX_VAD_THRESHOLD       2000
+#define DEFAULT_VAD_AUTO        true
 #define DEFAULT_AUTO_PLAY_TTS   true
 #define DEFAULT_BEEP_FEEDBACK   true
 #define DEFAULT_DIM_TIMEOUT_S   30    /* dim after 30 s */

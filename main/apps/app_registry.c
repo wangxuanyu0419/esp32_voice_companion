@@ -1,8 +1,5 @@
 #include "app_registry.h"
 #include "chat_app.h"
-#include "launcher_app.h"
-#include "settings_app.h"
-#include "media_player_app.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -18,11 +15,9 @@ esp_err_t app_registry_init(void)
     s_active = NULL;
     memset(s_apps, 0, sizeof(s_apps));
 
-    /* Register built-in apps */
-    app_registry_register(launcher_app_get());
+    /* ClawChat is the only system-level app.  Settings is an in-place page
+     * opened by the chat scene; launcher/media remain source modules only. */
     app_registry_register(chat_app_get());
-    app_registry_register(settings_app_get());
-    app_registry_register(media_player_app_get());
 
     ESP_LOGI(TAG, "App registry ready (%d apps)", s_count);
     return ESP_OK;

@@ -1,226 +1,47 @@
-# ESP32 OpenClaw Bridge — Development Status
+# 当前开发状态
 
-## Last Updated
-**2026-04-29**
+更新：**2026-10-16**。“已实现”表示源码已有逻辑；本次验证范围见 [验证记录](VALIDATION.md)。
 
----
+## 同步基线
 
-## Project Overview
+- 原远端 `main`：`a1caad0`（2026-06-07），扬声器测试音、PCM 路径和上行缓冲优化。
+- 本地提交：`a15bbd2`（2026-07-05），移除默认启动器／色彩测试流程。
+- 本次整理：迁移副本中的未提交固件、音频库、字体、头像，以及 9 月保留的音频兼容和串口工具。
+- 原 OneDrive 目录仅有残留目录和少量脚本；完整开发副本在 `E:/AI/ESP32/esp32_voice_companion`。本次在独立副本整理，没有重置原开发副本的索引或改动。
 
-**Goal**: Connect ESP32-S3 (running xiaozhi firmware) to OpenClaw server via WebSocket, enabling voice input/output + Live2D avatar UI.
+## 功能状态
 
-**Repo**: `https://github.com/wangxuanyu0419/esp32-voice-companion`
-**Firmware Directory**: `05_firmware/firmware/`
+| 模块 | 已实现内容 | 源码 |
+| --- | --- | --- |
+| 架构 | Board / System / Framework / Apps 四层、C 入口 | `main/main.c`、`main/CMakeLists.txt` |
+| 显示 | AMOLED、触摸、角色表情、聊天、主题和屏幕节能 | `main/board/`、`main/framework/display/` |
+| 网络／配置 | Wi-Fi 列表轮换、手动切换、NVS、服务器选择 | `main/system/`、`main/apps/settings/` |
+| 协议 | WSS 认证头、握手、心跳、JSON 分片重组、扩展消息 | `main/framework/protocol/ws_protocol.c` |
+| 语音输入 | ES8311/I2S、16 kHz PCM16、40 ms 分块、自适应 VAD、前滚和超时 | `audio_pipeline.c`、`vad.c`、`chat_app.c` |
+| 会话 | 半双工采音门控、流播放回调、中断及失败处理 | `main/apps/chat/chat_app.c` |
+| PCM 播放 | 有界队列、序号／校验统计、采样率转换和 I2S | `main/framework/audio/pcm_stream_player.c` |
+| HTTP 音频 | MP3/AAC/WAV/普通 M4A 解码、广播预取、停止 | `main/framework/audio/tts_player.c` |
+| 音量／电源 | 实际 DAC 音量、低音量增益、旧音量迁移、电源引用计数 | `audio_pipeline.c`、`config_store.c` |
+| 图片 | 同服务器 HTTPS 获取、JPEG/PNG 和 512 KiB 限制 | `remote_image.c`、`scene_avatar.c` |
+| 字体／头像 | SPIFFS 中文字库、自定义二进制字体、表情资源 | `spiffs_data/`、`cbin_font.c` |
+| TF 媒体 | JPG/WAV/MJPEG 代码和 MP4 转换工具，未在当前主入口注册 | `main/apps/media_player/`、`tools/mp4_to_mjpeg.py` |
+| 发送端兼容 | fMP4 标记检测、FFmpeg copy-remux、spool 保留 | `tools/n100/audio_broadcast_compat.py` |
 
----
+## 行为和限制
 
-## Architecture
+- 开机直接进入 chat，注册 settings；保留的 launcher／media player 文件不代表已启用。
+- VAD 是能量／噪声底检测。参数含约 1 秒前滚、1 秒静音结束、5 秒无语音超时。
+- 默认音量 12/100；一次性迁移识别历史默认值 80、24，并尽量保留显式自定义值。
+- `audio_play_beep()` 和旧 `audio_play_tts()` 为兼容桩；真实播放走 tts_player／pcm_stream_player。
+- fragmented MP4 需发送端转封装。copy-remux 不改变音频编码，不能让任意编码自动兼容。
+- `tts_player.c` 遗留 `wav_handle_data()` 未使用，存在编译警告。
+- 旧 `main/01_*` 至 `main/08_*`、根目录旧入口的删除随本地清理同步；历史设计计划仍保留。
+- 本次没有烧录、生产服务连接或端到端语音／音频／图片验收。
 
-```
-ESP32-S3 (xiaozhi firmware)
-  ├── app_main()                  ← modified to call openclaw_bridge_start()
-  ├── xiaozhi components         ← Wi-Fi / Display / Audio / LVGL (unchanged)
-  │
-  └── components/openclaw_bridge/ ← NEW OpenClaw bridge component
-        ├── openclaw_bridge.c     ← main loop: WS handshake, JSON parse, state machine
-        ├── openclaw_ws_client.c  ← raw TCP socket client (Phase 2: plain TCP, Phase 3: mbedtls TLS)
-        ├── openclaw_display.cpp  ← C++ display API (Phase 2: ESP_LOG stubs, Phase 3: real HW)
-        ├── cJSON.c/h             ← embedded JSON parser
-        └── CMakeLists.txt
+## 下一步
 
-OpenClaw Server (Mac: clawchat-server.js)
-  └── wss://clawchat.xuanyu.uk/ws (or localhost:8081 for local dev)
-        ├── stt_audio input (Phase 3)
-        └── returns: assistant_text / tts_text / live2d / status
-```
-
----
-
-## Git Commits
-
-| Commit | Message |
-|--------|---------|
-| `40b5a36` | docs: sync local esp32 prototype and add STT integration plan |
-| `ee97b89` | feat(openclaw_bridge): add OpenClaw Bridge component, Phase 1 text control path |
-| `59d0a24` | feat(openclaw_bridge): Phase 2 — real WS protocol + disconnect/reconnect loop |
-
-**Latest**: `59d0a24` on `main` branch — Phase 2 built and flashed to device.
-
----
-
-## Phase Progress
-
-### Phase 1 ✅ — Codebase Setup
-- [x] Sync local prototype to repo
-- [x] Add openclaw_bridge component skeleton
-- [x] Call `openclaw_bridge_start()` from `app_main()` alongside xiaozhi init
-- [x] Plain TCP socket connect (Phase 1 test)
-- [x] ESP_LOG-based display stubs
-- [x] Build + flash
-
-### Phase 2 ✅ — Real WS Protocol
-- [x] WS frame format (opcode 0x81) parsing
-- [x] hello → ready handshake
-- [x] JSON parse: status / assistant_text / tts_text / live2d / error
-- [x] Disconnect → reconnect loop (MAX 3 retries, then "Server unreachable")
-- [x] `openclaw_ws_client.c` with proper connect/write/read/close API
-- [x] Build + flash
-
-### Phase 3 ⏳ — Audio (next)
-- [ ] ES8311 I2S audio capture (PCM16 mono 16kHz)
-- [ ] Button-driven recording (press to record, release to finalize)
-- [ ] stt_audio message building (base64 PCM16 chunks)
-- [ ] TTS playback path
-- [ ] Real display HW integration (board.h display API)
-- [ ] LED status indication
-
-### Phase 4 📋 — Polish
-- [ ] mbedtls TLS (wss://) — currently using plain HTTP (port 80)
-- [ ] VAD-based auto-stop
-- [ ] Partial transcript UX
-- [ ] Interrupt while speaking
-
----
-
-## Key Files
-
-### Modified by OpenClaw Bridge
-| File | Change |
-|------|--------|
-| `main/main.cc` | +`#include "openclaw_bridge.h"` + call `openclaw_bridge_start()` |
-| `main/CMakeLists.txt` | Added `components` to INCLUDE_DIRS + `openclaw_bridge` to PRIV_REQUIRES |
-| `components/openclaw_bridge/*` | 9 new files (see Architecture above) |
-
-### Reference Files (xiaozhi, read-only)
-| File | Purpose |
-|------|---------|
-| `main/main.cc` | app entry point |
-| `main/application.cc/h` | xiaozhi init + run loop |
-| `main/boards/bread-compact-wifi/compact_wifi_board.cc` | board init (Wi-Fi, display, audio) |
-| `main/protocols/websocket_protocol.cc` | reference WS client implementation |
-| `main/display/emote_display.cc/h` | display API (SetStatus, SetChatMessage, SetEmotion, ShowNotification) |
-
----
-
-## Build & Flash (macOS)
-
-```bash
-# Source IDF
-. ~/esp/esp-idf-v5.5.2/export.sh
-
-# Build
-cd 05_firmware/firmware
-idf.py build
-
-# Flash (all sections)
-python3 ~/esp/esp-idf-v5.5.2/components/esptool_py/esptool/esptool.py \
-  --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 \
-  write_flash \
-  0x1000 build/bootloader/bootloader.bin \
-  0x8000 build/partition_table/partition-table.bin \
-  0xd000 build/ota_data_initial.bin \
-  0x20000 build/clawchat-esp32.bin \
-  0x800000 build/generated_assets.bin
-```
-
-**Note**: On macOS, opening `/dev/cu.usbmodem1101` sets DTR HIGH, which puts ESP32-S3 into ROM download mode. Use `--after no_reset` to avoid this. See Serial Debug section below.
-
----
-
-## Serial Debug (macOS Limitation)
-
-**Problem**: macOS USB-Serial-JTAG driver holds DTR high when port opens → ESP32-S3 enters ROM download mode instead of booting app.
-
-**Workarounds**:
-1. **Windows**: Use `idf.py monitor` directly — works correctly
-2. **screen**: `screen /dev/cu.usbmodem1101 115200` (may also show blank)
-3. **esptool run**: `idf.py -p /dev/cu.usbmodem1101 flash` then `idf.py -p /dev/cu.usbmodem1101 monitor`
-
-**Recommended**: Develop on Windows or use a USB-UART adapter (e.g. CH340) instead of the native USB-JTAG.
-
----
-
-## Windows Setup (for continued development)
-
-### Step 1: Clone repo
-```bash
-git clone https://github.com/wangxuanyu0419/esp32-voice-companion.git
-cd esp32-voice-companion
-```
-
-### Step 2: Install ESP-IDF
-Download from: https://dl.espressif.com/dl/esp-idf-windows-setup.exe
-Or use ESP-IDF Tools installer for Windows
-
-### Step 3: Build and flash
-```bash
-cd 05_firmware/firmware
-idf.py set-target esp32s3
-idf.py build
-idf.py flash -p COM3  # replace COM3 with actual port
-idf.py monitor       # ← this should work on Windows!
-```
-
-### Step 4: Configure Wi-Fi
-In `menuconfig` or `sdkconfig.defaults`:
-```
-CONFIG_WIFI_SSID="YourSSID"
-CONFIG_WIFI_PASSWORD="YourPassword"
-```
-
----
-
-## Server Connection
-
-**Server**: `wss://clawchat.xuanyu.uk/ws` (public, no auth)
-**Fallback (local Mac)**: `ws://localhost:8081/ws`
-
-For local development on Mac, run:
-```bash
-cd ~/clawchat-companion
-pm2 start ecosystem.config.js  # starts server on :8081
-```
-
-Then update `openclaw_bridge.c` to use `ws://YOUR_MAC_IP:8081/ws` during local dev.
-
----
-
-## Phase 3 — Audio Implementation Notes
-
-### Audio Format
-- PCM16 mono 16kHz
-- Chunk size: 40ms = 640 samples = 1280 bytes → ~1730 bytes base64
-
-### stt_audio Message Format
-```json
-{
-  "type": "stt_audio",
-  "audio": "<base64 PCM16 data>",
-  "isLast": false  // or true on release
-}
-```
-
-### Server Side
-- clawchat-companion `feature/stt-audio-buffer` branch handles `stt_audio` input
-- Final transcript goes through existing `user_text` reply pipeline
-- Returns: `status` / `assistant_text` / `tts_text` / `live2d`
-
-### ES8311 I2S Pins (to verify from hardware schematic)
-- I2S data pin: GPIO?? (TBD from hardware)
-- I2S bclk: GPIO??
-- I2S lrck: GPIO??
-- I2C SDA: GPIO??
-- I2C SCL: GPIO??
-
----
-
-## Open Questions / TODOs
-
-- [ ] Verify audio I2S pins from hardware schematic
-- [ ] Phase 3 code: audio capture + stt_audio sending
-- [ ] Phase 3 code: TTS playback (I2S to speaker)
-- [ ] Phase 3 code: LED status (GPIO pin TBD)
-- [ ] Phase 3 code: real display HW integration (board.h cascading deps issue)
-- [ ] Phase 3 code: mbedtls TLS for wss://
-- [ ] Phase 4: VAD-based hands-free mode
-- [ ] Phase 4: partial transcript UX
+1. 上板验证录音 → STT → 回复 → 播放 → 待机，记录后端版本与串口日志。
+2. 实测普通 M4A 和 fMP4 转封装广播，检查丢包、I2S 错误、首包延迟和持续播放。
+3. 回归图片、字体、服务器切换、重连、音量迁移及屏幕节能。
+4. 完成新 clone、默认配置的完整构建；本次原开发环境检查为增量构建。
+5. 决定是否恢复 TF 入口、实现提示音并清理未使用的旧组件／函数。

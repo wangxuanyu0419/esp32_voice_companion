@@ -10,6 +10,53 @@
 
 static const char *TAG           = "CONFIG_STORE";
 static const char *NVS_NAMESPACE = "esp32_voice";
+static const char *VOLUME_MIGRATION_KEY = "vol_mig";
+
+/* The old firmware stored the UI value but always drove the codec at the
+ * fixed DAC32=0xCB level. Version 1 moved the value to 24, which maps to
+ * DAC32=0xB6 (about 30% of the old amplitude). Version 2 moves the current
+ * device to 12 (about half that amplitude) exactly once. Explicit custom
+ * values are preserved, while both historical defaults are recognised. */
+static esp_err_t migrate_audio_volume_once(void)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (ret != ESP_OK) return ret;
+
+    int32_t version = 0;
+    ret = nvs_get_i32(handle, VOLUME_MIGRATION_KEY, &version);
+    if (ret == ESP_OK && version >= AUDIO_VOLUME_MIGRATION_VERSION) {
+        nvs_close(handle);
+        return ESP_OK;
+    }
+
+    int32_t old_volume = 0;
+    const esp_err_t old_ret = nvs_get_i32(handle, "volume", &old_volume);
+    int32_t target_volume = DEFAULT_VOLUME;
+    if (old_ret == ESP_OK && old_volume > 0 &&
+        old_volume != LEGACY_DEFAULT_VOLUME &&
+        old_volume != PREVIOUS_DEFAULT_VOLUME) {
+        /* A user-selected value is not a default; do not silently scale it. */
+        target_volume = old_volume;
+        if (target_volume > 100) target_volume = 100;
+    }
+    ret = nvs_set_i32(handle, "volume", target_volume);
+    if (ret == ESP_OK) {
+        ret = nvs_set_i32(handle, VOLUME_MIGRATION_KEY,
+                          AUDIO_VOLUME_MIGRATION_VERSION);
+    }
+    if (ret == ESP_OK) ret = nvs_commit(handle);
+    nvs_close(handle);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Audio volume migration: %ld -> %ld (one-time)",
+                 (long)((old_ret == ESP_OK) ? old_volume : 0),
+                 (long)target_volume);
+    } else {
+        ESP_LOGW(TAG, "Audio volume migration failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
 
 /* ── 可选服务器主机列表（第一个为默认/优先） ────────────────────────────── */
 const server_host_t g_server_hosts[] = {
@@ -81,6 +128,12 @@ esp_err_t config_init(void)
         nvs_close(handle);
     }
 
+    /* This is a bounded, one-time update of only volume and its version key. */
+    ret = migrate_audio_volume_once();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Audio volume migration skipped: %s", esp_err_to_name(ret));
+    }
+
     ESP_LOGI(TAG, "Config store ready");
     return ESP_OK;
 }
@@ -122,12 +175,18 @@ esp_err_t config_get(app_config_t *cfg)
 
     {
         int32_t tmp_vol  = 0;
+        int32_t tmp_vad  = DEFAULT_VAD_THRESHOLD;
+        int32_t tmp_vad_auto = DEFAULT_VAD_AUTO ? 1 : 0;
         int32_t tmp_auto = 0;
         int32_t tmp_beep = 0;
         nvs_get_i32(handle, "volume",    &tmp_vol);
+        nvs_get_i32(handle, "vad_threshold", &tmp_vad);
+        nvs_get_i32(handle, "vad_auto", &tmp_vad_auto);
         nvs_get_i32(handle, "auto_play", &tmp_auto);
         nvs_get_i32(handle, "beep",      &tmp_beep);
         cfg->volume        = (int)tmp_vol;
+        cfg->vad_threshold = (int)tmp_vad;
+        cfg->vad_auto_threshold = (bool)tmp_vad_auto;
         cfg->auto_play_tts = (bool)tmp_auto;
         cfg->beep_feedback = (bool)tmp_beep;
     }
@@ -155,6 +214,12 @@ esp_err_t config_get(app_config_t *cfg)
         strncpy(cfg->server_url, DEFAULT_SERVER_URL, sizeof(cfg->server_url) - 1);
     if (cfg->volume == 0)
         cfg->volume = DEFAULT_VOLUME;
+    if (cfg->volume < 0) cfg->volume = 0;
+    if (cfg->volume > 100) cfg->volume = 100;
+    if (cfg->vad_threshold < MIN_VAD_THRESHOLD)
+        cfg->vad_threshold = MIN_VAD_THRESHOLD;
+    if (cfg->vad_threshold > MAX_VAD_THRESHOLD)
+        cfg->vad_threshold = MAX_VAD_THRESHOLD;
 
     ESP_LOGI(TAG, "Config loaded: device=%s agent=%s server=%s",
              cfg->device_id, cfg->agent, cfg->server_url);
@@ -176,6 +241,8 @@ esp_err_t config_save(const app_config_t *cfg)
     if ((ret = nvs_set_str(handle, "device_id",  cfg->device_id))     != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "agent",      cfg->agent))         != ESP_OK) goto out;
     if ((ret = nvs_set_i32(handle, "volume",     cfg->volume))        != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "vad_threshold", cfg->vad_threshold)) != ESP_OK) goto out;
+    if ((ret = nvs_set_i32(handle, "vad_auto", cfg->vad_auto_threshold ? 1 : 0)) != ESP_OK) goto out;
     if ((ret = nvs_set_i32(handle, "auto_play",  cfg->auto_play_tts ? 1 : 0)) != ESP_OK) goto out;
     if ((ret = nvs_set_i32(handle, "beep",       cfg->beep_feedback  ? 1 : 0)) != ESP_OK) goto out;
     if ((ret = nvs_set_str(handle, "cf_client_id", cfg->cf_client_id))    != ESP_OK) goto out;
@@ -201,6 +268,8 @@ esp_err_t config_reset(void)
     strncpy(cfg.agent,       DEFAULT_AGENT,       sizeof(cfg.agent)       - 1);
     strncpy(cfg.server_url,  DEFAULT_SERVER_URL,  sizeof(cfg.server_url)  - 1);
     cfg.volume          = DEFAULT_VOLUME;
+    cfg.vad_threshold   = DEFAULT_VAD_THRESHOLD;
+    cfg.vad_auto_threshold = DEFAULT_VAD_AUTO;
     cfg.auto_play_tts   = DEFAULT_AUTO_PLAY_TTS;
     cfg.beep_feedback   = DEFAULT_BEEP_FEEDBACK;
     cfg.dim_timeout_s   = DEFAULT_DIM_TIMEOUT_S;

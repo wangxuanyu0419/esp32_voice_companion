@@ -21,6 +21,28 @@ esp_err_t audio_start_capture(void);
 esp_err_t audio_stop_capture(void);
 bool      audio_is_capturing(void);
 
+/*
+ * Reference-counted audio hardware power gate.  While the refcount is 0 the
+ * ES8311 codec is in standby (CLK1/SYS0D/SYS12/SYS13 written to their
+ * power-down values), the I2S TX/RX channels are disabled, and the speaker
+ * PA (GPIO46) is held low.  Every code path that actually moves audio
+ * through the codec — mic capture, TTS playback, WS PCM-stream playback, the
+ * media player's raw-I2S WAV playback, and the test tone — must call
+ * audio_power_acquire() before touching the codec/I2S and
+ * audio_power_release() exactly once when done.
+ *
+ * Acquiring while the gate is already held by another consumer is cheap
+ * (refcount increment only, no re-init, no glitch).  The FIRST acquire pays
+ * a ~20 ms settle latency (10 ms for I2S/MCLK to stabilise, 10 ms for the
+ * codec's analog/DAC stage to settle before the output driver/PA come back
+ * up).  release() is safe to call even if the refcount is already 0 (it
+ * logs a warning and does nothing rather than underflowing or powering
+ * anything off under a still-active consumer).  `reason` is a short static
+ * string used only for the ESP_LOGI acquire/release trace.
+ */
+esp_err_t audio_power_acquire(const char *reason);
+esp_err_t audio_power_release(const char *reason);
+
 esp_err_t audio_play_tts(const char *text);
 
 typedef enum {

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "esp_err.h"
 #include "emotion_map.h"
 #include "protocol.h"
@@ -40,6 +41,21 @@ typedef void (*ws_on_voice_ready_cb_t)(void *arg);
 typedef void (*ws_on_stt_final_cb_t)(const char *text, void *arg);
 typedef void (*ws_on_turn_state_cb_t)(const char *state, void *arg);
 
+/* Protocol events that are not part of the original voice callback set.
+ * Keep these callbacks transport-only so the existing avatar/display and
+ * audio implementations remain the source of truth. */
+typedef struct {
+    void (*on_broadcast)(const char *text, void *arg);
+    void (*on_agent_ack)(const char *text, void *arg);
+    void (*on_audio_broadcast)(const char *stream_id, const char *message, void *arg);
+    void (*on_tts_audio_start)(const char *stream_id, int sample_rate,
+                               int channels, const char *encoding, void *arg);
+    void (*on_tts_audio_chunk)(const uint8_t *data, size_t len, void *arg);
+    void (*on_tts_audio_end)(const char *stream_id, void *arg);
+    void (*on_image)(const char *url, const char *caption, void *arg);
+    void (*on_error)(const char *message, void *arg);
+} ws_extended_callbacks_t;
+
 void ws_protocol_register_callbacks(ws_on_tts_cb_t tts_cb,
                                     ws_on_live2d_cb_t live2d_cb,
                                     ws_on_status_cb_t status_cb,
@@ -51,6 +67,9 @@ void ws_protocol_register_voice_callbacks(ws_on_voice_ready_cb_t voice_ready_cb,
                                           ws_on_stt_final_cb_t stt_final_cb,
                                           ws_on_turn_state_cb_t turn_state_cb,
                                           void *arg);
+
+void ws_protocol_register_extended_callbacks(const ws_extended_callbacks_t *callbacks,
+                                              void *arg);
 
 /* Parse a JSON string received from the server. */
 void ws_protocol_parse(const char *json_str);
@@ -65,6 +84,7 @@ esp_err_t ws_client_init(void);
 esp_err_t ws_client_connect(const char *url);
 void      ws_client_disconnect(void);
 bool      ws_client_is_connected(void);
+bool      ws_client_is_ready(void);
 
 esp_err_t ws_client_send_hello(void);
 esp_err_t ws_client_send_text(const char *text);
@@ -78,6 +98,7 @@ esp_err_t ws_client_send_ping(void);
 /* ---- Voice session & binary audio (ClawChat protocol) ------------------- */
 esp_err_t ws_client_send_voice_session_start(void);
 esp_err_t ws_client_send_voice_session_stop(void);
+esp_err_t ws_client_send_voice_session_idle(const char *reason);
 esp_err_t ws_client_send_voice_turn_complete(void);
 
 /* Binary audio frame: 32-byte header + raw PCM16-LE.
